@@ -6,7 +6,7 @@
 #   本机时区是 America/Los_Angeles，与北京相差 15/16 小时且随美国夏令时漂移。
 #   若把 cron 写成本地时刻，每年 DST 切换两次都会让整套调度错开一小时，
 #   而且错开时不会有任何报错 —— 又是一次"静默失效"。
-#   现在：唤醒时刻无所谓，脚本用 market_time 取北京时间自行判定，时区漂移免疫。
+#   现在：唤醒时刻无所谓，脚本用 astock.runtime.clock 取北京时间自行判定，时区漂移免疫。
 #
 # 【节奏】沿用原系统：每交易日北京时间 10 / 11 / 14 点各一轮；
 #         周五收盘后（北京 15 点）跑一次周度数据底座采集。
@@ -35,11 +35,11 @@ FORCE_NOW=0
 
 # ---- 用交易所时钟取北京时间，绝不用本机时区 ----
 read -r BJ_DATE BJ_HOUR BJ_DOW <<EOF
-$("$PY" -c "import market_time as t; n=t.now(); print(n.strftime('%Y-%m-%d'), int(n.strftime('%H')), n.weekday())" 2>/dev/null)
+$("$PY" -c "from astock.runtime import clock; n=clock.now(); print(n.strftime('%Y-%m-%d'), int(n.strftime('%H')), n.weekday())" 2>/dev/null)
 EOF
 
 if [ -z "${BJ_DATE:-}" ]; then
-    echo "🔴 无法取得交易所时间，market_time 不可用" >&2
+    echo "🔴 无法取得交易所时间，astock.runtime.clock 不可用" >&2
     exit 1
 fi
 
@@ -107,26 +107,6 @@ fi
 
 # ---- 每轮收尾：停摆自检。这是 2026-07-31 事故后加的硬性动作 ----
 say "停摆自检"
-"$PY" - <<'PYEOF' >>"$LOG" 2>&1
-import json, os, datetime as dt
-import market_time; market_time.enforce()
-import freshness_gate as fg
-
-BASE = os.path.dirname(os.path.abspath("__file__")) or "."
-ACCTS = [("A组", "state.json")] + \
-        [(f"exp{i}", f"experiments/exp{i}_state.json") for i in range(1, 10)] + \
-        [(f"{g}组", f"group{g}/state.json") for g in "BCD"]
-now = dt.datetime.now()
-stalled = []
-for name, path in ACCTS:
-    if not os.path.exists(path):
-        continue
-    st = json.load(open(path, encoding="utf-8"))
-    r = fg.check(st, [{"时间": now.strftime("%Y-%m-%d %H:%M:%S")}], now=now,
-                 review_start=now - dt.timedelta(days=7), review_end=now)
-    if any(f["check"] == "stalled_engine" for f in r["red_flags"]):
-        stalled.append(name)
-print("🔴 停摆账户:", ", ".join(stalled) if stalled else "无")
-PYEOF
+$ASTOCK stall-check >>"$LOG" 2>&1
 
 say "===== 本轮结束 ====="

@@ -20,7 +20,7 @@ import sys
 from astock.runtime import paths
 
 BASE = str(paths.workspace())
-OUT = os.path.join(BASE, "dashboard.html")
+
 
 # 账户清单： (展示名, 策略说明, state路径, equity路径, trades路径, 颜色)
 ACCOUNTS = [
@@ -294,9 +294,11 @@ def render(data, live_status):
             .replace("__TS__", gen_ts)
             .replace("__LIVE__", live_status)
             .replace("__REGIME__", _regime_banner_html()))
-    with open(OUT, "w", encoding="utf-8") as f:
+    out = paths.dashboard_html()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as f:
         f.write(html)
-    return OUT
+    return str(out)
 
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>

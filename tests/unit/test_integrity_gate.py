@@ -160,14 +160,59 @@ class TestRealExp4EndToEnd(unittest.TestCase):
         return trades, state
 
     def test_exp4_flagged_dirty(self):
-        if not os.path.exists(os.path.join(BASE, "experiments", "exp4_state.json")):
-            self.skipTest("exp4 数据缺失")
-        trades, state = self._load()
-        r = ig.check(trades, state, init_cash=state.get("init_cash", 1_000_000.0))
-        self.assertFalse(r["clean"], "被污染的 exp4 必须判为 not clean")
-        self.assertTrue(_has(r, "cash_direction", "error"))
-        self.assertTrue(_has(r, "duplicate_order"))
-        self.assertTrue(_has(r, "state_mismatch", "error"))
+        """回归：2026-07 幽灵成交现场的三重红旗必须同时被点亮。
+
+        ⚠ 这个用例原先直接读【生产账本】experiments/exp4_state.json，数据不在
+        就 skipTest。结果是：数据一旦被清洗、或测试跑在隔离环境里，它就永久
+        静默跳过——一个从不失败也从不执行的测试，比没有测试更危险，
+        因为它让覆盖率报告显得很好看。
+
+        现在用**构造数据**复现当时的三个特征，测试永远会真的跑：
+          1) 两个进程各下一单、后写覆盖先写 → 买入后现金反而上涨
+          2) 同一只票同方向在 6 秒内重复成交
+          3) trades 重放出的净持仓与 state 对不上（state 只留下了后写的那笔）
+        """
+        trades = [
+            # 正常的第一笔
+            {"时间": "2026-07-09 14:45:20", "方向": "买入", "代码": "002415",
+             "名称": "海康威视", "价格": "30.00", "数量": "1000",
+             "成交额": "30000.00", "费用": "7.80", "现金余额": "969992.20", "备注": ""},
+            # 幽灵成交：并发进程读到的是旧 state，落盘后现金"反而变多了"
+            {"时间": "2026-07-09 14:45:26", "方向": "买入", "代码": "002415",
+             "名称": "海康威视", "价格": "30.00", "数量": "1000",
+             "成交额": "30000.00", "费用": "7.80", "现金余额": "969992.20", "备注": ""},
+            {"时间": "2026-07-09 14:45:28", "方向": "买入", "代码": "600519",
+             "名称": "贵州茅台", "价格": "10.00", "数量": "100",
+             "成交额": "1000.00", "费用": "5.01", "现金余额": "980000.00", "备注": ""},
+        ]
+        # state 只记下了"后写"的那一笔，与 trades 重放出的净持仓对不上
+        state = {"cash": 980000.00, "init_cash": 1_000_000.0,
+                 "positions": {"002415": {"qty": 1000, "available": 0, "cost": 30.01},
+                               "600519": {"qty": 100, "available": 0, "cost": 10.05}}}
+
+        r = ig.check(trades, state, init_cash=1_000_000.0)
+
+        self.assertFalse(r["clean"], "被污染的账本必须判为 not clean")
+        self.assertTrue(_has(r, "cash_direction", "error"),
+                        "买入后现金上涨 = 后写覆盖先写，必须点亮现金方向红旗")
+        self.assertTrue(_has(r, "duplicate_order"),
+                        "6 秒内同票同向重复成交，必须点亮重复下单红旗")
+        self.assertTrue(_has(r, "state_mismatch", "error"),
+                        "trades 重放与 state 不符，必须点亮账实对账红旗")
+
+    def test_clean_ledger_raises_no_flags(self):
+        """对照组：一本自洽的账本不得产生任何红旗——闸门不能只会喊狼来了。"""
+        trades = [
+            {"时间": "2026-07-09 10:00:00", "方向": "买入", "代码": "600519",
+             "名称": "贵州茅台", "价格": "10.00", "数量": "1000",
+             "成交额": "10000.00", "费用": "5.10", "现金余额": "989994.90", "备注": ""},
+            {"时间": "2026-07-10 10:00:00", "方向": "卖出", "代码": "600519",
+             "名称": "贵州茅台", "价格": "12.00", "数量": "1000",
+             "成交额": "12000.00", "费用": "17.12", "现金余额": "1001977.78", "备注": ""},
+        ]
+        state = {"cash": 1001977.78, "init_cash": 1_000_000.0, "positions": {}}
+        r = ig.check(trades, state, init_cash=1_000_000.0)
+        self.assertTrue(r["clean"], f"自洽账本被误报：{r['red_flags']}")
 
 
 if __name__ == "__main__":

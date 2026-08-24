@@ -178,7 +178,7 @@ def _prev_week_rounds(prev_iso):
     上周 weekly_data_*.json —— 那里面本来就记着每组的 round。
     文件不存在（首次复盘/历史缺失）返回空 dict，保持沉默不误报。
     """
-    path = os.path.join(BASE, f"weekly_data_{prev_iso}.json")
+    path = str(paths.weekly_data(prev_iso))
     if not os.path.exists(path):
         return {}
     try:
@@ -358,7 +358,8 @@ def main():
 
     data = collect(week_str, use_live)
     iso = data["meta"]["review_week"]
-    out = os.path.join(BASE, f"weekly_data_{iso}.json")
+    out = str(paths.reports_dir() / f"weekly_data_{iso}.json")
+    paths.reports_dir().mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 

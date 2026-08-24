@@ -90,6 +90,28 @@ def locks_dir() -> Path:
     return workspace() / ".locks"
 
 
+def reports_dir() -> Path:
+    """报表产物目录：周度数据底座、看板、周报正文。
+
+    这些都是**可重新生成**的产出，与账本分开存放：账本丢了不可恢复，
+    报表丢了重跑一次就有。混在工作区根目录里会让人分不清哪些删得、哪些删不得。
+    """
+    return workspace() / "reports"
+
+
+def weekly_data(iso_week: str) -> Path:
+    """某一周的周度数据底座。找不到新位置时回退到历史的工作区根。"""
+    primary = reports_dir() / f"weekly_data_{iso_week}.json"
+    if primary.exists():
+        return primary
+    legacy = workspace() / f"weekly_data_{iso_week}.json"
+    return legacy if legacy.exists() else primary
+
+
+def dashboard_html() -> Path:
+    return reports_dir() / "dashboard.html"
+
+
 def spread_log() -> Path:
     """多源价差审计日志（体积大、可重生成，不入库）。"""
     return workspace() / "spread_log.csv"

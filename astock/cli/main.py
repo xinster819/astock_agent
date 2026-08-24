@@ -114,6 +114,14 @@ def cmd_weekly(args) -> int:
     return weekly.main() or 0
 
 
+def cmd_stall_check(args) -> int:
+    """引擎停摆自检：有账户在跑却从未进入下单分支吗？"""
+    from astock.ops import stall_check
+
+    stall_check.report()
+    return 0        # 报告即目的，不因发现停摆而让调度脚本整体失败
+
+
 def cmd_doctor(args) -> int:
     """环境体检：时钟、工作区、配置、13 个账户的账本是否就位。"""
     from astock.runtime import paths
@@ -171,6 +179,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     weekly = sub.add_parser("weekly", help="周度复盘数据采集")
     weekly.set_defaults(func=cmd_weekly)
+
+    stall = sub.add_parser("stall-check", help="引擎停摆自检（每轮收尾跑）")
+    stall.set_defaults(func=cmd_stall_check)
 
     doctor = sub.add_parser("doctor", help="环境体检：时钟 / 工作区 / 账本")
     doctor.set_defaults(func=cmd_doctor)
