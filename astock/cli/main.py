@@ -127,6 +127,14 @@ def cmd_stall_check(args) -> int:
     return 0        # 报告即目的，不因发现停摆而让调度脚本整体失败
 
 
+def cmd_check_jitter(args) -> int:
+    """抖动与截断核对：本整点各账户是否真的跑了、有没有被超时杀掉。"""
+    from astock.ops import check_jitter
+
+    check_jitter.check(args.hour)
+    return 0
+
+
 def cmd_clean_ghosts(args) -> int:
     """清洗历史遗留的并发幽灵成交。默认预演，加 --apply 才写盘。"""
     from astock.ops import clean_ghost_trades
@@ -200,6 +208,11 @@ def build_parser() -> argparse.ArgumentParser:
     weekly.add_argument("--week", default=None, help="指定 ISO 周，如 2026-W34；省略取本周")
     weekly.add_argument("--offline", action="store_true", help="不拉实时指数")
     weekly.set_defaults(func=cmd_weekly)
+
+    jitter_cmd = sub.add_parser("check-jitter", help="抖动与超时截断核对")
+    jitter_cmd.add_argument("hour", nargs="?", type=int, default=None,
+                            help="目标整点 0-23，省略取当前小时")
+    jitter_cmd.set_defaults(func=cmd_check_jitter)
 
     clean = sub.add_parser("clean-ghosts", help="清洗历史遗留的并发幽灵成交")
     # 默认预演：这个命令会重写 trades.csv，改账本必须是显式动作
