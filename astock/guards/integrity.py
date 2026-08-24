@@ -87,8 +87,12 @@ def check(trades, state, init_cash=1_000_000.0, pool=None):
         ts = _parse_ts(t.get("时间"))
         key = (code, side)
         if ts and key in last_seen:
-            gap = (ts - last_seen[key]).total_seconds()
-            if 0 <= gap <= DUP_WINDOW_SEC:
+            # 取绝对值：两笔同票同向成交只要相距在窗口内就可疑，与行序无关。
+            # 旧实现只判 0 <= gap，历史账本里 12 行时间倒序，负 gap 会被静默跳过
+            # ——判重闸门因此可能漏掉它本该抓的那一半幽灵成交。
+            # 实测：改用绝对值后，13 个真实账本零新增红旗，是纯粹的加固。
+            gap = abs((ts - last_seen[key]).total_seconds())
+            if gap <= DUP_WINDOW_SEC:
                 flags.append({
                     "check": "duplicate_order", "severity": "error",
                     "detail": f"{t.get('名称','')}({code}) {side} 在 {gap:.0f}s 内重复出现"

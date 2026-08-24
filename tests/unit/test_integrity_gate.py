@@ -200,6 +200,27 @@ class TestRealExp4EndToEnd(unittest.TestCase):
         self.assertTrue(_has(r, "state_mismatch", "error"),
                         "trades 重放与 state 不符，必须点亮账实对账红旗")
 
+    def test_duplicate_detection_ignores_row_order(self):
+        """判重不该依赖行序：两笔同票同向只要相距在窗口内就可疑。
+
+        旧实现只判 0 <= gap，第二行时间戳更早时产生负 gap，被静默跳过——
+        判重闸门因此漏掉它本该抓的那一半幽灵成交。真实账本里有 12 行是倒序的。
+        """
+        reversed_rows = [
+            {"时间": "2026-07-09 14:45:26", "方向": "买入", "代码": "002415",
+             "名称": "海康威视", "价格": "30.00", "数量": "1000",
+             "成交额": "30000.00", "费用": "7.80", "现金余额": "969992.20", "备注": ""},
+            # 第二行的时间戳【更早】——取价顺序与下单顺序不一致时的真实形态
+            {"时间": "2026-07-09 14:45:20", "方向": "买入", "代码": "002415",
+             "名称": "海康威视", "价格": "30.00", "数量": "1000",
+             "成交额": "30000.00", "费用": "7.80", "现金余额": "939984.40", "备注": ""},
+        ]
+        state = {"cash": 939984.40, "init_cash": 1_000_000.0,
+                 "positions": {"002415": {"qty": 2000, "available": 0, "cost": 30.01}}}
+        r = ig.check(reversed_rows, state, init_cash=1_000_000.0)
+        self.assertTrue(_has(r, "duplicate_order"),
+                        "6 秒内同票同向重复，即使行序颠倒也必须被抓到")
+
     def test_clean_ledger_raises_no_flags(self):
         """对照组：一本自洽的账本不得产生任何红旗——闸门不能只会喊狼来了。"""
         trades = [

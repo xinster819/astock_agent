@@ -115,9 +115,21 @@ class Account:
         return self._execute(rules.sell(self.state, quote, qty, reason), quote)
 
     def _execute(self, result: Execution, quote: dict[str, Any]) -> Execution:
-        """成交才写账本。拒单不留痕——trades.csv 是成交流水，不是尝试日志。"""
+        """成交才写账本。拒单不留痕——trades.csv 是成交流水，不是尝试日志。
+
+        时间列记的是**成交时刻**，不是行情快照的取价时刻。
+
+        ⚠ 这是一处行为修正。旧实现用 `quote["ts"]`——那是逐只股票取价时打的
+        时间戳，而下单顺序（先卖后买、买入再按候选分排序）与取价顺序不同，
+        于是成交行的时间**不单调**。真实账本里有 12 行是倒序的。
+        后果不只是难看：`integrity.duplicate_order` 判重时算的是
+        `gap = ts - 上一次同票同向的 ts`，只在 `0 <= gap <= 120s` 时告警——
+        倒序产生的负 gap 被直接跳过。也就是说**幽灵成交检测器会漏掉
+        时间戳恰好倒序的那一半**，而它存在的全部理由就是抓幽灵成交。
+        用成交时刻则天然单调。
+        """
         if result.ok and result.fill is not None:
-            self.ledger.append_fill(result.fill, timestamp=quote.get("ts") or clock.stamp())
+            self.ledger.append_fill(result.fill, timestamp=clock.stamp())
         return result
 
     # ------------------------------------------------------------------

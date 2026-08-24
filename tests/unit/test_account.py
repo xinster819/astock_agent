@@ -94,9 +94,27 @@ class TestTrading:
         assert not result.ok
         assert account.ledger.read_trades() == []
 
-    def test_quote_timestamp_is_used_when_present(self, account, make_quote):
-        account.buy(make_quote("600519", price=10.0, ts="2026-08-25 10:30:00"), 100)
-        assert account.ledger.read_trades()[0]["时间"] == "2026-08-25 10:30:00"
+    def test_trade_time_is_the_fill_time_not_the_quote_time(self, account, make_quote):
+        """时间列记成交时刻，不记行情快照的取价时刻。
+
+        旧实现用 quote["ts"]——逐只股票取价时打的时间戳。而下单顺序
+        （先卖后买、买入再按候选分排序）与取价顺序不同，成交行因此**不单调**。
+        """
+        quote = make_quote("600519", price=10.0, ts="2020-01-01 00:00:00")
+        account.buy(quote, 100)
+        assert account.ledger.read_trades()[0]["时间"] != "2020-01-01 00:00:00"
+
+    def test_trade_times_are_monotonic(self, account, make_quote):
+        """单调性是 integrity.duplicate_order 判重的隐含前提。
+
+        它算 gap = 本次 ts - 上次同票同向 ts，倒序产生的负 gap 会被跳过——
+        幽灵成交检测器因此可能漏掉它本该抓的那一半。
+        """
+        # 刻意让取价时刻倒序，模拟真实的"逐只取价、乱序下单"
+        account.buy(make_quote("600001", price=10.0, ts="2026-08-25 10:00:30"), 100)
+        account.buy(make_quote("600002", price=10.0, ts="2026-08-25 10:00:10"), 100)
+        times = [row["时间"] for row in account.ledger.read_trades()]
+        assert times == sorted(times), f"成交行时间必须单调：{times}"
 
     def test_settle_new_day_is_idempotent(self, account, make_quote):
         account.buy(make_quote("600519", price=10.0), 1000)

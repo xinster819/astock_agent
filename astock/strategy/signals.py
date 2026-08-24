@@ -14,6 +14,7 @@ import json
 import os
 
 from astock.runtime import paths
+from astock.strategy import families
 
 MA_FAST, MA_MID, MA_SLOW = 5, 10, 20
 MAX_POSITIONS = 5
@@ -122,6 +123,29 @@ def _golden_cross(closes, fast=MA_FAST, slow=MA_SLOW):
 _IND_CACHE: dict = {}
 
 
+def recent_closes(code, bars=31, lookback_days=120):
+    """取最近若干根日线的收盘价。取不到返回空列表，并**显式告警**。
+
+    只有 cross_up_ma30 需要它——MA30 不在常规指标产物里。
+    静默返回空会让 exp3 整轮无买入信号，与"确实没信号"表现完全一致，
+    不说出来就无从分辨。
+    """
+    import datetime as _dt
+
+    from astock.data import market
+
+    end = _dt.datetime.now().strftime("%Y%m%d")
+    start = (_dt.datetime.now() - _dt.timedelta(days=lookback_days)).strftime("%Y%m%d")
+    try:
+        df = market.get_hist(code, start, end, adjust="qfq")
+    except Exception as exc:
+        print(f"⚠ {code} 日线取数失败，本轮该票无长周期信号：{exc!r}"[:120])
+        return []
+    if df is None or len(df) < bars:
+        return []
+    return df["收盘"].astype(float).tolist()
+
+
 def clear_indicator_cache():
     """清空轮内指标缓存。每轮开始时调用，保证跨轮取到最新日线。"""
     _IND_CACHE.clear()
@@ -188,6 +212,9 @@ def generate_signals(st, quotes, exp_config=None):
     max_new_per_round = cfg.get("max_new_per_round", MAX_NEW_PER_ROUND)
     momentum_threshold = cfg.get("momentum_threshold", 0.0)
     signal_logic = cfg.get("signal_logic", "cross_up_ma20")
+    # 提前解析：signal_logic 拼错要在这里就炸掉，而不是逐票判断时静默全部落空
+    # ——后者的表现是"该账户对全池所有票都不买"，永久静默停止交易。
+    decide_buy = families.resolve(signal_logic)
     # 慢线周期由 signal_logic 的名字决定（cross_up_ma10/20/30），
     # 配置里的 ma_slow 不参与计算；两者矛盾时 experiments.validate_config 会报错。
     market_regime = cfg.get("market_regime", "normal")
@@ -281,106 +308,11 @@ def generate_signals(st, quotes, exp_config=None):
             if not ind:
                 continue
 
-            # 根据信号逻辑判断是否买入
-            bullish = (ind["ma5"] and ind["ma20"] and ind["ma5"] > ind["ma20"])
-            should_buy = False
-
-            if signal_logic == "cross_up_ma20":
-                # 基准策略：上穿MA20 + 多头排列 + 动量>0
-                should_buy = ind["cross_up_ma20"] and bullish and ind["momentum"] > momentum_threshold
-            elif signal_logic == "cross_up_ma10":
-                # 放宽策略：上穿MA10 + 多头排列 + 动量>-3%
-                ma10 = ind["ma10"]
-                prev_close = ind["prev_close"]
-                cross_up_ma10 = prev_close <= ma10 and ind["close"] > ma10 if ma10 else False
-                should_buy = cross_up_ma10 and bullish and ind["momentum"] > momentum_threshold
-            elif signal_logic == "cross_up_ma30":
-                # 严格策略：上穿MA30 + 多头排列 + 动量>5%
-                # 需要计算MA30
-                from astock.data import market
-                end = dt.datetime.now().strftime("%Y%m%d")
-                start = (dt.datetime.now() - dt.timedelta(days=120)).strftime("%Y%m%d")
-                try:
-                    df = market.get_hist(code, start, end, adjust="qfq")
-                    if df is not None and len(df) >= 31:
-                        closes = df["收盘"].astype(float).tolist()
-                        ma30 = _ma(closes, 30)
-                        prev_ma30 = _ma(closes[:-1], 30)
-                        cross_up_ma30 = closes[-2] <= prev_ma30 and closes[-1] > ma30 if prev_ma30 else False
-                        should_buy = cross_up_ma30 and bullish and ind["momentum"] > momentum_threshold
-                except Exception as exc:
-                    # 绝不静默：取不到 MA30 时 exp3 会整轮无买入信号，
-                    # 与"确实没信号"表现完全一致——不说出来就无从分辨。
-                    print(f"⚠ {code} MA30 计算失败，本轮该票无 cross_up_ma30 信号：{exc!r}"[:120])
-            elif signal_logic == "ma5_cross_ma20":
-                # 金叉策略：MA5「上穿」MA20 的真穿越事件 + 动量达标。
-                # 修复「假金叉」——旧实现只判当前 ma5>ma20（已多头即买），
-                # 会追高接盘；现在要求上一周期 ma5<=ma20、当前 ma5>ma20 的穿越本身。
-                should_buy = ind.get("golden_cross", False) and ind["momentum"] > momentum_threshold
-            elif signal_logic == "pure_momentum":
-                # 动量组也需要趋势与成交量确认，避免弱市追逐反弹。
-                should_buy = (
-                    ind["momentum"] > momentum_threshold
-                    and bullish
-                    and (ind.get("volume_ratio") is None
-                         or ind["volume_ratio"] >= cfg.get("min_volume_ratio", 1.0))
-                )
-            elif signal_logic == "mean_reversion":
-                # 震荡市均值回归：短期超卖、仍在中期趋势之上，等待回归而非追涨。
-                rsi14 = ind.get("rsi14")
-                should_buy = (
-                    rsi14 is not None
-                    and rsi14 <= cfg.get("rsi_buy_max", 35)
-                    and ind["close"] >= ind["ma20"] * cfg.get("ma20_floor", 0.97)
-                    and ind["momentum"] >= momentum_threshold
-                )
-            elif signal_logic == "quality_breakout":
-                # 质量突破：趋势、MA20 上穿、相对成交量与温和动量共同确认。
-                # breakout_relaxed=True 时把"当日上穿 MA20"（罕见同 bar 事件，
-                # 曾致全周 0 单）放宽为"站上/上穿 MA20"，但放量+动量+多头仍是硬门槛。
-                volume_ratio = ind.get("volume_ratio")
-                breakout_relaxed = cfg.get("breakout_relaxed", False)
-                above_ma20 = ind.get("ma20") and ind["close"] >= ind["ma20"]
-                breakout_ok = (above_ma20 if breakout_relaxed
-                               else ind["cross_up_ma20"])
-                should_buy = (
-                    breakout_ok
-                    and bullish
-                    and ind["momentum"] > momentum_threshold
-                    and (volume_ratio is None
-                         or volume_ratio >= cfg.get("min_volume_ratio", 1.1))
-                )
-            elif signal_logic == "factor_rank":
-                # 多因子横截面排序（借鉴 Qlib 因子模型思想，纯 stdlib 实现）。
-                # 与事件触发型策略正交：不赌某个"穿越/突破"事件，而是先把
-                # 满足基本门槛(多头 + 动量达标 + 未超买)的票全部入围，再用
-                # 可配置权重的合成因子分在候选集里择优买入"相对最强"者。
-                rsi14 = ind.get("rsi14")
-                not_overbought = rsi14 is None or rsi14 <= cfg.get("rsi_overbought", 72)
-                should_buy = (
-                    bullish
-                    and ind["momentum"] > momentum_threshold
-                    and not_overbought
-                )
-                if should_buy:
-                    weights = cfg.get("factor_weights", {})
-                    w_mom = weights.get("momentum", 1.0)
-                    w_vol = weights.get("volume", 0.3)
-                    w_rsi = weights.get("rsi_mid", 0.2)
-                    w_dist = weights.get("distance_penalty", 0.5)
-                    volume_ratio = ind.get("volume_ratio")
-                    # 量能贡献：相对成交量越高越好，封顶 2.0 归一化。
-                    vol_c = (min(volume_ratio, 2.0) / 2.0) if volume_ratio else 0.0
-                    # RSI 适中度：偏离 55 越远得分越低（惩罚超买/超卖两端）。
-                    rsi_mid = 1.0 - min(abs((rsi14 if rsi14 is not None else 55) - 55) / 45.0, 1.0)
-                    # 偏离度惩罚：离 MA20 越远越像追高。
-                    dist = (ind["close"] / ind["ma20"] - 1) if ind.get("ma20") else 0.0
-                    ind["factor_score"] = (
-                        w_mom * ind["momentum"]
-                        + w_vol * vol_c
-                        + w_rsi * rsi_mid
-                        - w_dist * max(dist, 0.0)
-                    )
+            # 该不该买，交给信号族决定。九组的差异全部收敛在这一行背后——
+            # 每个族是 families.py 里的一个纯函数，可独立测试、独立演进。
+            ctx = families.SignalContext(ind=ind, cfg=cfg,
+                                         momentum_threshold=momentum_threshold)
+            should_buy = decide_buy(ctx)
 
             # 突破确认：拒绝远离 MA20 的追高信号；非标准数据不阻塞既有策略。
             if should_buy and ind.get("ma20") and ind.get("close"):
