@@ -188,3 +188,56 @@ class TestRegimePersistence:
     def test_regime_is_written_to_state(self, offline):
         _run()
         assert Account.open("exp1").state["market_regime"] == "normal"
+
+
+class TestRuleAccountEntrypoints:
+    """`run_rule` 是规则组的薄壳：A 组与 exp 组的差异只在参数上。"""
+
+    @pytest.fixture(autouse=True)
+    def stub_indicators(self, monkeypatch):
+        """这两个用例跑的是真 `rule_decider`，它会去取日线算指标——桩掉。
+
+        本组考核的是"参数怎么传"，不是"信号怎么算"（后者见 test_signal_families）。
+        """
+        from astock.strategy import signals
+
+        monkeypatch.setattr(signals, "_indicators", lambda code: None)
+
+    def test_control_round_uses_the_control_policy(self, offline, monkeypatch):
+        from astock.pipeline import run_rule
+
+        captured = {}
+        real = round_engine.run_round
+
+        def spy(account_id, decide, **kwargs):
+            captured.update(account_id=account_id, **kwargs)
+            return real(account_id, decide, **kwargs)
+
+        monkeypatch.setattr(run_rule, "run_round", spy)
+        run_rule.run_control(force=True, verbose=False)
+
+        assert captured["account_id"] == "A"
+        assert captured["policy"].use_risk_guard is False, "对照基线不加组合风控"
+        assert captured["policy"].cooldown_sec is not None, "但仍要有防抖"
+
+    def test_experiment_round_passes_its_config(self, offline, monkeypatch):
+        from astock.pipeline import run_rule
+
+        captured = {}
+        real = round_engine.run_round
+
+        def spy(account_id, decide, **kwargs):
+            captured.update(account_id=account_id, **kwargs)
+            return real(account_id, decide, **kwargs)
+
+        monkeypatch.setattr(run_rule, "run_round", spy)
+        run_rule.run_experiment("exp4", force=True, verbose=False)
+
+        assert captured["account_id"] == "exp4"
+        assert captured["config"]["signal_logic"] == "ma5_cross_ma20"
+        assert captured.get("policy") is None, "实验组用默认 policy（含风控）"
+
+    def test_unknown_experiment_returns_none_without_crashing(self, offline):
+        from astock.pipeline import run_rule
+
+        assert run_rule.run_experiment("exp99", verbose=False) is None

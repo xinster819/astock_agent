@@ -238,3 +238,70 @@ class TestRealExp4EndToEnd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestSoftConstraints(unittest.TestCase):
+    """软约束：不阻断交易，但必须报出来供复盘。"""
+
+    def _state(self, positions):
+        return {"cash": 100.0, "init_cash": 1_000_000.0, "positions": positions}
+
+    def test_position_overflow_is_flagged_as_warning(self):
+        positions = {f"60000{i}": {"qty": 100, "available": 0, "cost": 10.0}
+                     for i in range(ig.MAX_POSITIONS + 2)}
+        r = ig.check([], self._state(positions), init_cash=1_000_000.0)
+        self.assertTrue(_has(r, "position_overflow", "warn"))
+
+    def test_position_count_at_the_limit_is_fine(self):
+        positions = {f"60000{i}": {"qty": 100, "available": 0, "cost": 10.0}
+                     for i in range(ig.MAX_POSITIONS)}
+        r = ig.check([], self._state(positions), init_cash=1_000_000.0)
+        self.assertFalse(_has(r, "position_overflow"))
+
+    def test_out_of_pool_holding_is_flagged(self):
+        """持有池外的票通常意味着池被改小了，而旧仓位还在——需要人来决定怎么处理。"""
+        state = self._state({"999999": {"qty": 100, "available": 0, "cost": 10.0}})
+        r = ig.check([], state, init_cash=1_000_000.0, pool=["600519"])
+        self.assertTrue(_has(r, "out_of_pool", "warn"))
+
+    def test_in_pool_holding_is_not_flagged(self):
+        state = self._state({"600519": {"qty": 100, "available": 0, "cost": 10.0}})
+        r = ig.check([], state, init_cash=1_000_000.0, pool=["600519"])
+        self.assertFalse(_has(r, "out_of_pool"))
+
+    def test_pool_check_is_skipped_when_no_pool_given(self):
+        """不传池就不查——绝不能因为调用方没给池就把所有持仓报成越界。"""
+        state = self._state({"999999": {"qty": 100, "available": 0, "cost": 10.0}})
+        r = ig.check([], state, init_cash=1_000_000.0)
+        self.assertFalse(_has(r, "out_of_pool"))
+
+
+class TestRunCli(unittest.TestCase):
+    """体检 CLI 覆盖全部 13 个账户。
+
+    此前这里硬编码了第 7 份 13 行账户表——同一份名单在仓库里前后出现过 7 次。
+    """
+
+    def test_reports_every_initialised_account(self):
+        import os
+        import tempfile
+
+        from astock.core.account import Account
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.environ.get("ASTOCK_HOME")
+            os.environ["ASTOCK_HOME"] = tmp
+            try:
+                Account.open("exp1")
+                lines = []
+                dirty = ig.run_cli(printer=lines.append)
+                text = "\n".join(lines)
+                self.assertEqual(dirty, 0)
+                self.assertIn("exp1", text)
+                self.assertIn("未初始化，跳过", text, "未开张的账户应显式跳过")
+                self.assertEqual(text.count("未初始化，跳过"), 12)
+            finally:
+                if old is None:
+                    os.environ.pop("ASTOCK_HOME", None)
+                else:
+                    os.environ["ASTOCK_HOME"] = old

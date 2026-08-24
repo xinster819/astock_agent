@@ -176,45 +176,32 @@ def check(trades, state, init_cash=1_000_000.0, pool=None):
 
 
 # ---- CLI：对全部账户跑一遍体检 ----
-def _run_cli():
-    import csv as _csv
-    import json
-    import os
-    base = str(paths.workspace())
-    accounts = [
-        ("A组", "state.json", "trades.csv"),
-        ("exp1", "experiments/exp1_state.json", "experiments/exp1_trades.csv"),
-        ("exp2", "experiments/exp2_state.json", "experiments/exp2_trades.csv"),
-        ("exp3", "experiments/exp3_state.json", "experiments/exp3_trades.csv"),
-        ("exp4", "experiments/exp4_state.json", "experiments/exp4_trades.csv"),
-        ("exp5", "experiments/exp5_state.json", "experiments/exp5_trades.csv"),
-        ("exp6", "experiments/exp6_state.json", "experiments/exp6_trades.csv"),
-        ("exp7", "experiments/exp7_state.json", "experiments/exp7_trades.csv"),
-        ("exp8", "experiments/exp8_state.json", "experiments/exp8_trades.csv"),
-        ("exp9", "experiments/exp9_state.json", "experiments/exp9_trades.csv"),
-        ("B组", "groupB/state.json", "groupB/trades.csv"),
-        ("C组", "groupC/state.json", "groupC/trades.csv"),
-        ("D组", "groupD/state.json", "groupD/trades.csv"),
-    ]
-    print("== 账本完整性体检 ==")
-    for name, sp, tp in accounts:
-        spath, tpath = os.path.join(base, sp), os.path.join(base, tp)
-        if not os.path.exists(spath):
-            print(f"  {name}: 未初始化，跳过")
+def run_cli(printer=print) -> int:
+    """对 13 个账户逐个体检，返回脏账户数。
+
+    账户名单来自 `paths.all_accounts()`。此前这里硬编码了第 7 份 13 行账户表——
+    同一份名单在仓库里前后出现过 7 次，改布局要改 7 处，漏一处就有账户体检不到。
+    """
+    from astock.runtime import files
+
+    printer("== 账本完整性体检 ==")
+    dirty = 0
+    for account in paths.all_accounts():
+        state = files.read_json(account.state)
+        if state is None:
+            printer(f"  {account.account}: 未初始化，跳过")
             continue
-        with open(spath, encoding="utf-8") as f:
-            state = json.load(f)
-        trades = []
-        if os.path.exists(tpath):
-            with open(tpath, encoding="utf-8") as f:
-                trades = list(_csv.DictReader(f))
-        r = check(trades, state, init_cash=state.get("init_cash", 1_000_000.0))
-        tag = "✅ clean" if r["clean"] else "🔴 DIRTY"
-        print(f"\n  {name}: {tag}  ({len(r['red_flags'])} 红旗)")
-        for fl in r["red_flags"]:
-            mark = "🔴" if fl["severity"] == "error" else "🟡"
-            print(f"    {mark} [{fl['check']}] {fl['detail']}")
+        trades = files.read_csv_rows(account.trades)
+        result = check(trades, state, init_cash=state.get("init_cash", 1_000_000.0))
+        if not result["clean"]:
+            dirty += 1
+        tag = "✅ clean" if result["clean"] else "🔴 DIRTY"
+        printer(f"\n  {account.account}: {tag}  ({len(result['red_flags'])} 红旗)")
+        for flag in result["red_flags"]:
+            mark = "🔴" if flag["severity"] == "error" else "🟡"
+            printer(f"    {mark} [{flag['check']}] {flag['detail']}")
+    return dirty
 
 
-if __name__ == "__main__":
-    _run_cli()
+#: 兼容旧调用名
+_run_cli = run_cli

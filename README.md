@@ -133,7 +133,7 @@ make check      # 静态检查 + 全量测试
 make cov        # 带覆盖率
 ```
 
-410 个用例，全部离线、无需联网，跑完约 2 秒。
+650 个用例，全部离线、无需联网，跑完约 2 秒。全仓覆盖率 80%。
 
 「静默失效」这条原则同样适用于测试本身——**一个从不失败也从不执行的测试，
 比没有测试更危险，因为它让覆盖率报告显得很好看。** 这个仓库真出过三次：
@@ -154,8 +154,9 @@ make cov        # 带覆盖率
   import，回指上层就失败；`core`/`runtime` 引入网络库就失败；模块顶层做 IO 就失败。
   最后一条正是当年 `broker.py` 的原罪。
 
-覆盖率上，只对 `core` / `runtime`（钱和账本）设 90% 硬门槛。取数与报表层大量依赖
-外网，设门槛只会逼出假测试。
+覆盖率上，只对 `core` / `runtime`（钱和账本）设 90% 硬门槛（实测 95%）。
+取数层大量依赖外网，不设硬门槛以免逼出假测试——但它的**判定逻辑**是全覆盖的：
+三源交叉验证的每一条分支都有用例，包括「两源一致、第三源离谱也必须拒单」。
 
 ---
 
@@ -219,6 +220,11 @@ astock run all                # 全部 9 个实验组
 astock prepare C              # Agent 组第一段 → groupC/decision_input.json
 #   → 你的 agent 读 decision_input.json，写 decision_output.json
 astock execute C              # 第三段：校验 → 硬闸 → 落账本 → 归档
+
+astock doctor                 # 环境体检：时钟 / 工作区 / 账本
+astock stall-check            # 引擎停摆自检
+astock check-jitter [HH]      # 抖动与超时截断核对
+astock clean-ghosts [--apply] # 清洗历史幽灵成交（默认预演）
 
 astock report                 # 13 个账户横向对比表
 astock report exp4            # 单账户详情

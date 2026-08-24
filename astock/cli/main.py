@@ -98,7 +98,11 @@ def cmd_check(args) -> int:
     """账本完整性体检：现金单调性、重复下单、trades 重放对账、负现金。"""
     from astock.guards import integrity
 
-    return integrity._run_cli()
+    dirty = integrity.run_cli()
+    if dirty:
+        print(f"\n🔴 {dirty} 个账户账实不符。脏账户不得进入收益排名与归因；"
+              f"确认成因后可用 `astock clean-ghosts` 预演清洗。")
+    return 0        # 体检是报告，不是门禁——非零会让调度脚本整体报警
 
 
 def cmd_dashboard(args) -> int:
