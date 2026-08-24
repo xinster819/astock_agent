@@ -16,6 +16,7 @@
   get_news_for_codes(codes, ...)   批量（去重 + 票数上限 + 单票失败隔离）
 纯 stdlib（akshare 仅在默认 fetch 内延迟 import）。
 """
+import contextlib
 import datetime as dt
 
 DEFAULT_STALE_DAYS = 3      # 超过约 T-3 视为过期，不能作唯一买入依据
@@ -33,10 +34,8 @@ def _default_fetch(code):
         import akshare as ak
         return ak.stock_news_em(symbol=code)
     finally:
-        try:
+        with contextlib.suppress(Exception):
             pd.set_option("mode.string_storage", old)
-        except Exception:
-            pass
 
 
 def _parse_time(raw):
@@ -56,7 +55,7 @@ def _row_get(row, *keys):
         try:
             v = row.get(k)
         except AttributeError:
-            v = row[k] if k in row else None
+            v = row.get(k, None)
         if v is not None and str(v).strip():
             return str(v).strip()
     return None

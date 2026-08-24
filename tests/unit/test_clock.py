@@ -6,13 +6,14 @@
 
 核心断言：**无论进程时区是什么，北京时间的交易时段判定必须一致。**
 """
+import datetime as dt
 import os
 import time
 import unittest
-import datetime as dt
+from typing import ClassVar
 
-from astock.runtime import clock as market_time
 from astock.data import market
+from astock.runtime import clock as market_time
 
 BEIJING = market_time.MARKET_TZ
 # 2026-08-25 是周二
@@ -50,8 +51,8 @@ class _TZCase(unittest.TestCase):
 class TestTradingWindowIsTimezoneIndependent(_TZCase):
     """同一北京时刻，在任何进程时区下判定都必须相同。"""
 
-    SESSION = [(9, 30), (10, 0), (11, 30), (13, 0), (14, 0), (15, 0)]
-    CLOSED = [(8, 0), (9, 29), (11, 31), (12, 0), (15, 1), (18, 0)]
+    SESSION: ClassVar = [(9, 30), (10, 0), (11, 30), (13, 0), (14, 0), (15, 0)]
+    CLOSED: ClassVar = [(8, 0), (9, 29), (11, 31), (12, 0), (15, 1), (18, 0)]
 
     def _assert_all(self, tzname):
         self.PROCESS_TZ = tzname

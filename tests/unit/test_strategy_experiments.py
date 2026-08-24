@@ -1,14 +1,8 @@
 """Tests for the three orthogonal experimental signal families and risk exits."""
-import os
-import sys
 import unittest
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-if BASE not in sys.path:
-    sys.path.insert(0, BASE)
-
 from astock.strategy import signals as strategy
-from test_strategy_signals import _StrategyStub
+from tests.helpers import StrategyStub as _StrategyStub
 
 
 def indicator(code, *, close=100.0, ma5=101.0, ma10=100.0, ma20=100.0,

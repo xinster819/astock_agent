@@ -10,14 +10,12 @@ trade_guard · 执行层幂等/防抖闸门 + 跨进程账户互斥锁
 
 纯 stdlib，被 run_exp / execute 直接调用。
 """
+import errno
 import os
 import time
-import errno
-import datetime as dt
 from contextlib import contextmanager
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-_LOCK_DIR = os.path.join(BASE, ".locks")
+from astock.runtime import paths
 
 DEFAULT_COOLDOWN_SEC = 60
 DEFAULT_TTL_SEC = 600
@@ -50,9 +48,12 @@ def can_execute(state, now=None, cooldown_sec=DEFAULT_COOLDOWN_SEC):
 # ---------------- 跨进程互斥锁 ----------------
 
 def _lock_path(key):
-    os.makedirs(_LOCK_DIR, exist_ok=True)
+    # 每次调用重新解析工作区：测试要能在临时目录里加锁，
+    # 模块级常量做不到这件事。
+    lock_dir = paths.locks_dir()
+    os.makedirs(lock_dir, exist_ok=True)
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(key))
-    return os.path.join(_LOCK_DIR, f"{safe}.lock")
+    return os.path.join(lock_dir, f"{safe}.lock")
 
 
 @contextmanager
@@ -77,7 +78,7 @@ def account_lock(key, ttl_sec=DEFAULT_TTL_SEC):
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except OSError as e:
             if e.errno == errno.EEXIST:
-                raise LockBusy(f"账户 {key} 正被另一执行者占用（锁: {path}）")
+                raise LockBusy(f"账户 {key} 正被另一执行者占用（锁: {path}）") from e
             raise
         os.write(fd, f"{os.getpid()}\t{time.time()}".encode())
         os.close(fd)

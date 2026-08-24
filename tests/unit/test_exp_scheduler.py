@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 from astock.pipeline import exp_scheduler
 
@@ -13,9 +12,9 @@ def test_run_all_once_continues_after_one_group_failure(monkeypatch):
             raise RuntimeError("synthetic failure")
         return f"ok:{exp_id}"
 
-    monkeypatch.setattr(exp_scheduler.run_exp, "run_experiment", fake_run)
+    monkeypatch.setattr(exp_scheduler.run_rule, "run_experiment", fake_run)
     result = exp_scheduler.run_all_once(
-        ["exp1", "exp2", "exp3"], force=True, retries=0, verbose=False
+        ["exp1", "exp2", "exp3"], force=True, retries=0, verbose=False, pause_sec=0
     )
 
     assert calls == ["exp1", "exp2", "exp3"]
@@ -24,9 +23,9 @@ def test_run_all_once_continues_after_one_group_failure(monkeypatch):
 
 
 def test_scheduler_writes_audit_record(tmp_path, monkeypatch):
-    monkeypatch.setattr(exp_scheduler.run_exp, "run_experiment", lambda *a, **k: "ok")
+    monkeypatch.setattr(exp_scheduler.run_rule, "run_experiment", lambda *a, **k: "ok")
     audit = tmp_path / "scheduler.jsonl"
-    result = exp_scheduler.run_all_once(["exp1"], force=True, verbose=False, audit_path=audit)
+    result = exp_scheduler.run_all_once(["exp1"], force=True, verbose=False, audit_path=audit, pause_sec=0)
 
     assert result["completed"] == ["exp1"]
     rows = [json.loads(line) for line in audit.read_text().splitlines()]
@@ -44,8 +43,8 @@ def test_scheduler_retries_failed_group_without_blocking_later_groups(monkeypatc
             raise RuntimeError("temporary")
         return "ok"
 
-    monkeypatch.setattr(exp_scheduler.run_exp, "run_experiment", flaky)
-    result = exp_scheduler.run_all_once(["exp1", "exp2", "exp3"], force=True, retries=1, verbose=False)
+    monkeypatch.setattr(exp_scheduler.run_rule, "run_experiment", flaky)
+    result = exp_scheduler.run_all_once(["exp1", "exp2", "exp3"], force=True, retries=1, verbose=False, pause_sec=0)
 
     assert attempts["exp2"] == 2
     assert result["completed"] == ["exp1", "exp2", "exp3"]

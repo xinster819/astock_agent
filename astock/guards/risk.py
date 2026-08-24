@@ -7,7 +7,6 @@ this module independent of a strategy, broker, or clock.
 from dataclasses import dataclass
 from typing import Optional
 
-
 REGIMES = ("normal", "high_volatility", "risk_off")
 
 

@@ -1,112 +1,147 @@
+"""执行层护栏 · 集成测试：互斥锁 + 冷却去抖真的拦住了重复触发。
+
+【根因复盘】
+一轮交易是"读 state → 生成信号 → 下单 → 写 state"。两个进程在数秒内同时启动
+会都读到满血 state、各下一单、后写覆盖先写 —— trades 记两笔、state 只剩一笔，
+即"幽灵成交"。exp4/exp5 曾出现间隔 6~8s 的重复成交，就是这个并发窗口。
+
+两层防御：
+  1) `trade.can_execute` 冷却去抖：距上次成功执行不足 60s 判为重复触发
+  2) `trade.account_lock` 文件互斥：同一账户同时只允许一个执行者
+
+【与重构前的区别】
+旧版测试要 stub 掉 `run_exp._buy_exp` / `exp_manager.load_exp_state` 等一堆内部
+函数才能跑——因为账本路径在 import 期就钉死了，碰不得真文件。而它 stub 的
+`_buy_exp` 正是那份重复实现，测试因此并没有覆盖真正的下单路径。
+
+现在账本路径是运行期解析的，conftest 给每个用例一个独立临时工作区，
+于是这里可以跑**真实的 Account、真实的账本落盘**，只桩掉外网行情。
 """
-执行层幂等锁 · 集成测试（run_exp / execute 两个下单入口)
-=================================================================
-验证护栏真正拦住"数秒内重复触发"：第二次调用必须跳过下单循环、不产生第二笔交易。
-用真账户文件跑会污染数据，故这里对 broker/market/strategy 打桩，只考核护栏逻辑接线。
-"""
-import unittest
 import os
-import sys
-import time
-import types
-import datetime as dt
+from datetime import datetime
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-if BASE not in sys.path:
-    sys.path.insert(0, BASE)
+import pytest
 
+from astock.core.account import Account
 from astock.guards import trade as tg
+from astock.pipeline import round_engine
+from astock.pipeline.round_engine import RoundPolicy, run_round
+
+ACCOUNT = "exp1"
+CODE = "600000"
 
 
-class TestRunExpGuardWiring(unittest.TestCase):
-    """run_exp.run_experiment：锁内加载 state + 冷却去抖，重复触发不再下单。"""
+@pytest.fixture
+def offline_market(monkeypatch):
+    """把行情层钉成确定值，让测试只考核护栏接线，不依赖外网。"""
+    from astock.data import market
+    from astock.strategy import signals
 
-    def setUp(self):
-        from astock.pipeline import run_exp
-        self.run_exp = run_exp
-        self.key = f"exp_itest_{os.getpid()}"
-        # 内存态账户，避免碰真文件
-        self.mem_state = {"cash": 1_000_000.0, "init_cash": 1_000_000.0,
-                          "positions": {}, "round": 0, "exp_id": self.key}
-        self.buy_calls = []
-
-        from astock.core import experiments as exp_manager
-        self._orig = {}
-        # 打桩 exp_manager：配置存在、状态走内存
-        self._patch(exp_manager, "get_exp_config", lambda e: {"name": "itest"})
-        self._patch(exp_manager, "load_exp_state", lambda e: dict(self.mem_state))
-        def _save(e, st):
-            self.mem_state = dict(st)   # 落盘=更新内存态（含 last_run_ts）
-        self._patch(exp_manager, "save_exp_state", _save)
-
-        from astock.data import market
-        from astock.strategy import signals as strategy
-        self._patch(market, "is_trading_now", lambda now: (True, "交易中"))
-        self._patch(market, "get_quotes", lambda codes: {c: {"code": c, "name": c,
-                    "price": 10.0, "limit_up": 11.0, "limit_down": 9.0} for c in codes})
-        self._patch(market, "log_spread", lambda q: None)
-        self._patch(market, "sample_spreads", lambda: (0, None))
-        self._patch(strategy, "load_pool", lambda: ["600000"])
-        # 每轮都想买一笔，用于观测护栏是否拦截
-        self._patch(strategy, "generate_signals",
-                    lambda st, quotes, exp_config=None: [
-                        {"action": "buy", "code": "600000", "qty": 100, "reason": "itest"}])
-        # 记录真实下单调用
-        self._patch(self.run_exp, "_buy_exp",
-                    lambda st, q, qty, reason, exp_id: (self.buy_calls.append(1), (True, "buy"))[1])
-        self._patch(self.run_exp, "_log_equity_exp", lambda *a, **k: None)
-
-    def _patch(self, mod, name, fn):
-        self._orig[(mod, name)] = getattr(mod, name)
-        setattr(mod, name, fn)
-
-    def tearDown(self):
-        for (mod, name), fn in self._orig.items():
-            setattr(mod, name, fn)
-        p = tg._lock_path(self.key)
-        if os.path.exists(p):
-            os.remove(p)
-
-    def test_second_rapid_call_skips_ordering(self):
-        # 第一次：应放行并下单
-        self.run_exp.run_experiment(self.key, force=True, verbose=False)
-        self.assertEqual(len(self.buy_calls), 1, "首轮必须下单")
-        self.assertIn("last_run_ts", self.mem_state, "首轮须写入 last_run_ts")
-        # 数秒后第二次：冷却期内，必须跳过下单循环
-        # 手动把 last_run_ts 拨到 8 秒前，模拟真实并发窗口
-        self.mem_state["last_run_ts"] = dt.datetime.now().timestamp() - 8
-        self.run_exp.run_experiment(self.key, force=True, verbose=False)
-        self.assertEqual(len(self.buy_calls), 1, "冷却期内第二次触发不得再下单")
-
-    def test_after_cooldown_orders_again(self):
-        self.run_exp.run_experiment(self.key, force=True, verbose=False)
-        self.assertEqual(len(self.buy_calls), 1)
-        # 冷却期外
-        self.mem_state["last_run_ts"] = dt.datetime.now().timestamp() - 120
-        self.run_exp.run_experiment(self.key, force=True, verbose=False)
-        self.assertEqual(len(self.buy_calls), 2, "过冷却期应重新下单")
+    monkeypatch.setattr(market, "is_trading_now", lambda now=None: (True, "交易中"))
+    monkeypatch.setattr(market, "get_quotes", lambda codes: {
+        c: {"code": c, "name": c, "price": 10.0, "limit_up": 11.0, "limit_down": 9.0}
+        for c in codes})
+    monkeypatch.setattr(market, "log_spread", lambda quotes: None)
+    monkeypatch.setattr(market, "sample_spreads", lambda: (0, None))
+    monkeypatch.setattr(signals, "load_pool", lambda: [CODE])
+    # 市场状态走网络，这里固定为 normal
+    monkeypatch.setattr(round_engine, "_current_regime", lambda config, out: "normal")
 
 
-class TestLockSerializesExecution(unittest.TestCase):
-    """账户锁被占用时，run_experiment 直接跳过（不抛异常、不下单)。"""
-
-    def test_busy_lock_skips(self):
-        from astock.pipeline import run_exp
-        from astock.core import experiments as exp_manager
-        key = f"exp_busy_{os.getpid()}"
-        orig_cfg = exp_manager.get_exp_config
-        exp_manager.get_exp_config = lambda e: {"name": "busy"}
-        try:
-            with tg.account_lock(key):
-                # 锁已被本测试持有，内部再抢应 LockBusy → 被吞掉、安全返回
-                res = run_exp.run_experiment(key, force=True, verbose=False)
-            self.assertIn("跳过本轮", res)
-        finally:
-            exp_manager.get_exp_config = orig_cfg
-            p = tg._lock_path(key)
-            if os.path.exists(p):
-                os.remove(p)
+@pytest.fixture
+def always_buy():
+    """每轮都想买一手，用于观测护栏是否拦住了第二次。"""
+    return lambda ctx: [{"action": "buy", "code": CODE, "qty": 100, "reason": "itest"}]
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+def _trade_count() -> int:
+    return len(Account.open(ACCOUNT).ledger.read_trades())
+
+
+def _run(decide, **kwargs):
+    return run_round(ACCOUNT, decide, config={"name": "itest"},
+                     policy=RoundPolicy(use_risk_guard=False),
+                     force=True, verbose=False, **kwargs)
+
+
+class TestCooldownDedup:
+    """冷却去抖：数秒内的第二次触发不得再下单。"""
+
+    def test_first_round_places_order(self, offline_market, always_buy):
+        report = _run(always_buy)
+        assert report.ordered is True
+        assert len(report.fills) == 1, "首轮必须下单"
+        assert "last_run_ts" in Account.open(ACCOUNT).state, "首轮须写入 last_run_ts"
+
+    def test_second_rapid_call_skips_ordering(self, offline_market, always_buy):
+        _run(always_buy)
+        assert _trade_count() == 1
+
+        # 模拟真实并发窗口：上一轮是 8 秒【之前】跑的
+        acct = Account.open(ACCOUNT)
+        acct.state["last_run_ts"] = datetime.now().timestamp() - 8
+        acct.save()
+
+        report = _run(always_buy)
+        assert report.ordered is False, "冷却期内不得进入下单分支"
+        assert report.skipped and "重复触发" in report.skipped
+        assert _trade_count() == 1, "冷却期内第二次触发不得再产生成交"
+
+    def test_after_cooldown_orders_again(self, offline_market, always_buy):
+        _run(always_buy)
+        acct = Account.open(ACCOUNT)
+        acct.state["last_run_ts"] = datetime.now().timestamp() - 120   # 拨到冷却期外
+        acct.save()
+
+        report = _run(always_buy)
+        assert report.ordered is True
+        assert _trade_count() == 2, "过了冷却期应重新下单"
+
+    def test_blocked_round_still_refreshes_equity(self, offline_market, always_buy):
+        """被防抖拦下也要刷权益——权益曲线断点会被 freshness_gate 判为不新鲜。"""
+        _run(always_buy)
+        before = len(Account.open(ACCOUNT).ledger.read_equity())
+        _run(always_buy)                       # 冷却期内
+        assert len(Account.open(ACCOUNT).ledger.read_equity()) == before + 1
+
+    def test_blocked_round_does_not_advance_last_run_ts(self, offline_market, always_buy):
+        """被拦下时不得刷新时间戳，否则冷却窗口会被重复触发不断往后推。"""
+        _run(always_buy)
+        stamp = Account.open(ACCOUNT).state["last_run_ts"]
+        _run(always_buy)
+        assert Account.open(ACCOUNT).state["last_run_ts"] == stamp
+
+
+class TestLockSerializesExecution:
+    """账户锁被占用时应直接跳过：不抛异常、不下单、不损坏账本。"""
+
+    def test_busy_lock_skips(self, offline_market, always_buy):
+        with tg.account_lock(ACCOUNT):
+            report = _run(always_buy)
+        assert report.ordered is False
+        assert report.skipped and "占用" in report.skipped
+        assert not os.path.exists(Account.open(ACCOUNT).paths.trades), "被锁时不得产生成交"
+
+    def test_lock_released_after_round(self, offline_market, always_buy):
+        _run(always_buy)
+        # 锁在轮次结束后必须释放，否则下一轮会被自己挡在门外
+        with tg.account_lock(ACCOUNT):
+            pass
+
+
+class TestClockSkewIsSelfHealing:
+    """`last_run_ts` 落在未来时（时钟回拨/坏写入）不冻结账户。
+
+    这是刻意的取舍：把未来时间戳一律判为"冷却中"会让账户永久停摆，
+    而停摆恰恰是本项目最忌讳的静默失效。放行并覆写时间戳能自愈，
+    代价是极端时钟异常下可能漏掉一次去抖——两害相权取其轻。
+    """
+
+    def test_future_timestamp_does_not_freeze_account(self, offline_market, always_buy):
+        acct = Account.open(ACCOUNT)
+        acct.state["last_run_ts"] = datetime.now().timestamp() + 3600
+        acct.save()
+
+        report = _run(always_buy)
+        assert report.ordered is True, "未来时间戳不应让账户永久停摆"
+        assert Account.open(ACCOUNT).state["last_run_ts"] < datetime.now().timestamp() + 1

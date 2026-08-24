@@ -17,14 +17,16 @@
   python3 weekly_collect.py --no-live      # 跳过指数抓取(离线/非交易时段快速出数据)
   python3 weekly_collect.py --week 2026-W27  # 指定复盘周(默认当前周)
 """
-import os
-import sys
-import re
-import json
 import csv
 import datetime as dt
+import json
+import os
+import re
+import sys
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+from astock.runtime import paths
+
+BASE = str(paths.workspace())
 
 # 账户清单：(展示名, 策略说明, state, equity, trades)
 ACCOUNTS = [
@@ -130,9 +132,8 @@ def _last_point_before(ecurve, deadline):
     best = None
     for r in ecurve:
         t = _parse_ts(r.get("时间", ""))
-        if t and t <= deadline:
-            if not best or t > best[0]:
-                best = (t, _fnum(r.get("总资产")), _fnum(r.get("累计收益率%")))
+        if t and t <= deadline and (not best or t > best[0]):
+            best = (t, _fnum(r.get("总资产")), _fnum(r.get("累计收益率%")))
     return best
 
 
@@ -141,9 +142,8 @@ def _first_point_after(ecurve, start):
     best = None
     for r in ecurve:
         t = _parse_ts(r.get("时间", ""))
-        if t and t >= start:
-            if not best or t < best[0]:
-                best = (t, _fnum(r.get("总资产")), _fnum(r.get("累计收益率%")))
+        if t and t >= start and (not best or t < best[0]):
+            best = (t, _fnum(r.get("总资产")), _fnum(r.get("累计收益率%")))
     return best
 
 
@@ -154,17 +154,18 @@ def collect_indices(use_live=True):
         return {n: None for n, _ in INDICES}
     try:
         from astock.data import quote_sources as qs
-    except Exception as e:
+    except Exception:
         return {n: None for n, _ in INDICES}
     for name, sym in INDICES:
         try:
             txt = qs._get(f"http://qt.gtimg.cn/q={sym}", gbk=True)
             f = txt.split('"')[1].split("~")
-            price = float(f[3]); prev = float(f[4])
+            price = float(f[3])
+            prev = float(f[4])
             pct = (price / prev - 1) * 100 if prev else None
             out[name] = {"price": round(price, 2), "prev_close": round(prev, 2),
                          "pct_vs_prevclose": round(pct, 3) if pct is not None else None}
-        except Exception as e:
+        except Exception:
             out[name] = None
     return out
 

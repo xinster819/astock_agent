@@ -10,14 +10,16 @@
 用法：python3 dashboard.py            # 生成 dashboard.html
       python3 dashboard.py --no-live  # 跳过实时行情(用成本价占位，快速出图)
 """
-import os
-import sys
-import re
-import json
 import csv
 import datetime as dt
+import json
+import os
+import re
+import sys
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+from astock.runtime import paths
+
+BASE = str(paths.workspace())
 OUT = os.path.join(BASE, "dashboard.html")
 
 # 账户清单： (展示名, 策略说明, state路径, equity路径, trades路径, 颜色)

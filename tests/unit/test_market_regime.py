@@ -1,34 +1,32 @@
 """market_regime 集中化模块的行为测试：核心是"数据源失效时的处置分级"。"""
-import os
-import shutil
-import tempfile
-import unittest
 import datetime as dt
+import pathlib
+import unittest
+
+import pytest
 
 from astock.data import market
 from astock.guards import regime as mr
 
 
+@pytest.mark.usefixtures("isolated_env")
 class TestRegimeExceptionHandling(unittest.TestCase):
-    """⚠ 测试隔离：本类会写/删 regime 缓存，必须重定向到临时文件。
+    """数据源失效时 classify() 的三级处置：live → 缓存 → 冷启动默认。
 
-    历史坑：test_cold_start 里 os.remove(mr.CACHE_FILE) 删的是【生产缓存】。
-    正常情况下另两个用例会把它重新写回，但只要它们提前失败（例如环境缺 pandas），
-    缓存就被永久删掉且无人察觉。而缓存一丢，classify() 退回 cold_start_default，
-    多数实验组配置的 fallback 是 risk_off → effective_max_new=0 → 全组静默禁止开仓。
-    又一次"静默失效"。现在统一重定向到 tempdir，测试绝不碰生产数据。
+    历史坑：这里原先要手工把 mr.CACHE_FILE 重定向到 tempdir，否则
+    test_cold_start 里的 os.remove 删的是【生产缓存】。缓存一丢，classify()
+    退回 cold_start_default，多数实验组的 fallback 是 risk_off →
+    effective_max_new=0 → 全组静默禁止开仓，又一次"静默失效"。
+
+    重构后缓存路径由 runtime.paths 在运行期解析，conftest 的 isolated_env
+    给每个用例一个独立工作区——手工重定向连同它的注意事项一起不需要了。
     """
 
     def setUp(self):
         self._orig = market.get_index_hist
-        self._orig_cache = mr.CACHE_FILE
-        self._tmpdir = tempfile.mkdtemp(prefix="regime_cache_test_")
-        mr.CACHE_FILE = os.path.join(self._tmpdir, "market_regime_cache.json")
 
     def tearDown(self):
         market.get_index_hist = self._orig
-        mr.CACHE_FILE = self._orig_cache
-        shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def test_live_success_not_degraded(self):
         import pandas as pd
@@ -58,11 +56,8 @@ class TestRegimeExceptionHandling(unittest.TestCase):
         self.assertEqual(second.regime, "normal")  # 关键：不是 risk_off
 
     def test_cold_start_uses_conservative_default_and_flags(self):
-        # 删掉缓存模拟冷启动 + 断源（setUp 已把 CACHE_FILE 指向临时目录）
-        try:
-            os.remove(mr.CACHE_FILE)
-        except OSError:
-            pass
+        # 删掉缓存模拟冷启动 + 断源（工作区已由 isolated_env 隔离到 tmp）
+        pathlib.Path(mr._cache_file()).unlink(missing_ok=True)
         market.get_index_hist = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("断源"))
         r = mr.classify(cold_start_default="risk_off")
         self.assertEqual(r.source, "cold_start_default")

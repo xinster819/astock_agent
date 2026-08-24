@@ -9,9 +9,11 @@
   卖出：收盘价跌破 MA10，或相对成本亏损 <= -8%（止损），或盈利 >= +20%（止盈）。
 风控：单票上限 20% 总资产；最多持仓 5 只；每轮最多新开 2 笔。
 """
-import os
-import json
 import datetime as dt
+import json
+import os
+
+from astock.runtime import paths
 
 MA_FAST, MA_MID, MA_SLOW = 5, 10, 20
 MAX_POSITIONS = 5
@@ -85,9 +87,9 @@ DEFAULT_POOL = [
 
 
 def load_pool():
-    p = os.path.join(os.path.dirname(__file__), "watchlist.json")
+    p = str(paths.watchlist())
     if os.path.exists(p):
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             return json.load(f).get("pool", DEFAULT_POOL)
     return DEFAULT_POOL
 
@@ -186,7 +188,8 @@ def generate_signals(st, quotes, exp_config=None):
     max_new_per_round = cfg.get("max_new_per_round", MAX_NEW_PER_ROUND)
     momentum_threshold = cfg.get("momentum_threshold", 0.0)
     signal_logic = cfg.get("signal_logic", "cross_up_ma20")
-    ma_slow = cfg.get("ma_slow", MA_SLOW)
+    # 慢线周期由 signal_logic 的名字决定（cross_up_ma10/20/30），
+    # 配置里的 ma_slow 不参与计算；两者矛盾时 experiments.validate_config 会报错。
     market_regime = cfg.get("market_regime", "normal")
     max_breakout_distance = cfg.get("max_breakout_distance", 0.08)
     # 高波动环境降低开仓数量；risk_off 只允许卖出，不产生买入信号。
@@ -225,7 +228,7 @@ def generate_signals(st, quotes, exp_config=None):
                             "qty": p["available"], "reason": reason})
 
     # ---- 存量仓位再平衡：配置收紧后，下一交易轮自动把旧仓位压回风险预算。----
-    from astock.core.broker import market_value
+    from astock.core.rules import market_value
     _, portfolio_total = market_value(st, quotes)
     active_positions = []
     for code, p in positions.items():
@@ -256,7 +259,7 @@ def generate_signals(st, quotes, exp_config=None):
     remaining = [item for item in active_positions if item[0] not in planned_sells]
     if len(remaining) > max_positions:
         # 优先退出动量最弱的超额仓位；同动量时按代码稳定排序，保证可复现。
-        for code, p, _, ind in sorted(
+        for code, p, _, _ind in sorted(
             remaining, key=lambda item: ((item[3] or {}).get("momentum", float("-inf")), item[0])
         )[:len(remaining) - max_positions]:
             qty = p.get("available", 0)
@@ -305,8 +308,10 @@ def generate_signals(st, quotes, exp_config=None):
                         prev_ma30 = _ma(closes[:-1], 30)
                         cross_up_ma30 = closes[-2] <= prev_ma30 and closes[-1] > ma30 if prev_ma30 else False
                         should_buy = cross_up_ma30 and bullish and ind["momentum"] > momentum_threshold
-                except:
-                    pass
+                except Exception as exc:
+                    # 绝不静默：取不到 MA30 时 exp3 会整轮无买入信号，
+                    # 与"确实没信号"表现完全一致——不说出来就无从分辨。
+                    print(f"⚠ {code} MA30 计算失败，本轮该票无 cross_up_ma30 信号：{exc!r}"[:120])
             elif signal_logic == "ma5_cross_ma20":
                 # 金叉策略：MA5「上穿」MA20 的真穿越事件 + 动量达标。
                 # 修复「假金叉」——旧实现只判当前 ma5>ma20（已多头即买），
@@ -387,7 +392,7 @@ def generate_signals(st, quotes, exp_config=None):
 
         candidates.sort(key=lambda x: x.get("factor_score", x["momentum"]), reverse=True)
         # 估算总资产用于仓位控制
-        from astock.core.broker import market_value
+        from astock.core.rules import market_value
         _, total = market_value(st, quotes)
         budget_per = total * max_weight
         for ind in candidates[:min(slots, effective_max_new)]:

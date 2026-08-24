@@ -20,16 +20,17 @@ clean_ghost_trades · 清洗并发幽灵成交（幂等、可回滚、清完自�
   python3 clean_ghost_trades.py            # 清洗 exp3/exp4/exp5（自动检测所有脏账户）
   python3 clean_ghost_trades.py --dry-run  # 只预演，不写盘
 """
-import os
-import sys
 import csv
-import json
-import shutil
 import datetime as dt
+import json
+import os
+import shutil
+import sys
 
 from astock.guards import integrity as ig
+from astock.runtime import paths
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+BASE = str(paths.workspace())
 WIN = ig.DUP_WINDOW_SEC
 
 
@@ -71,10 +72,9 @@ def _ghost_row_indices(rows):
 
 
 def _replay(rows):
-    cash = None
     qty = {}
     for r in rows:
-        amt = ig._f(r.get("成交额")); fee = ig._f(r.get("费用")); q = ig._i(r.get("数量"))
+        q = ig._i(r.get("数量"))
         side = (r.get("方向") or "").strip()
         if side == "买入":
             qty[r["代码"]] = qty.get(r["代码"], 0) + q
@@ -89,7 +89,8 @@ def clean_account(name, spath, tpath, dry_run=False):
     if not (os.path.exists(spath) and os.path.exists(tpath)):
         return f"  {name}: 文件缺失，跳过"
 
-    state = json.load(open(spath, encoding="utf-8"))
+    with open(spath, encoding="utf-8") as f:
+        state = json.load(f)
     header, rows = _read_trades(tpath)
 
     before = ig.check(rows, state, init_cash=state.get("init_cash", 1_000_000.0))

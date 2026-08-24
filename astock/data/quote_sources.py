@@ -172,6 +172,7 @@ def fetch_all(code, retries=2, retry_wait=0.5):
     对交叉验证的贡献与"取数失败"完全一致——不改判定，只省延迟。
     """
     import time
+
     from astock.data import source_health
     health = source_health.QUOTES
     results = {}

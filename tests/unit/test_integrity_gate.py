@@ -17,9 +17,9 @@ state:  dict，同 state.json（cash / positions / init_cash ...）
 
 严重级：error = 数据可信度被破坏（净值不可信）；warn = 需人工看一眼但不必然污染。
 """
-import unittest
-import os
 import csv
+import os
+import unittest
 
 from astock.guards import integrity as ig
 

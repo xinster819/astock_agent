@@ -16,61 +16,10 @@ ma5_cross_ma20 分支只判「当前 ma5 > ma20」（已多头），根本没检
 本测试通过打桩 _indicators 的返回来断言 generate_signals 的取舍。
 """
 import unittest
-import os
-import sys
-
-BASE = os.path.dirname(os.path.abspath(__file__))
-if BASE not in sys.path:
-    sys.path.insert(0, BASE)
 
 from astock.strategy import signals as strategy
-
-
-def _ind(code, ma5, ma20, momentum, golden_cross, close=10.0):
-    """构造一个 _indicators 返回值。"""
-    return {
-        "code": code, "close": close, "prev_close": close,
-        "ma5": ma5, "ma10": ma5, "ma20": ma20, "prev_ma20": ma20,
-        "momentum": momentum,
-        "cross_up_ma20": False, "below_ma10": False,
-        "golden_cross": golden_cross,   # 新契约：MA5 上穿 MA20 的穿越事件
-    }
-
-
-class _StrategyStub:
-    """打桩 strategy._indicators / load_pool / market_value，纯内存。"""
-
-    def __init__(self, indicators_by_code, pool):
-        self.map = indicators_by_code
-        self.pool = pool
-        self._orig = {}
-
-    def __enter__(self):
-        self._orig["_indicators"] = strategy._indicators
-        self._orig["load_pool"] = strategy.load_pool
-        strategy._indicators = lambda code: self.map.get(code)
-        strategy.load_pool = lambda: self.pool
-        # market_value 被 from broker import market_value 动态引用，打桩到 broker
-        from astock.core import broker
-        self._orig["mv"] = broker.market_value
-        broker.market_value = lambda st, quotes: (
-            sum(
-                float(p.get("qty", 0)) * float((quotes.get(code) or {}).get("price") or p.get("cost", 0))
-                for code, p in st.get("positions", {}).items()
-            ),
-            float(st["cash"]) + sum(
-                float(p.get("qty", 0)) * float((quotes.get(code) or {}).get("price") or p.get("cost", 0))
-                for code, p in st.get("positions", {}).items()
-            ),
-        )
-        return self
-
-    def __exit__(self, *a):
-        strategy._indicators = self._orig["_indicators"]
-        strategy.load_pool = self._orig["load_pool"]
-        from astock.core import broker
-        broker.market_value = self._orig["mv"]
-
+from tests.helpers import StrategyStub as _StrategyStub
+from tests.helpers import make_indicators as _ind
 
 CFG = {"signal_logic": "ma5_cross_ma20", "momentum_threshold": 0.0,
        "max_positions": 5, "max_new_per_round": 2, "max_weight": 0.20}

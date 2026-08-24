@@ -18,6 +18,8 @@ integrity_gate · 账本数据完整性闸门（确定性、零主观、零外�
 """
 import datetime as dt
 
+from astock.runtime import paths
+
 DUP_WINDOW_SEC = 120     # 同票同向重复下单的时间窗
 QTY_EPS = 0             # 持仓数量必须精确一致（整数股）
 CASH_EPS = 1.0          # 现金对账容差（元）——费用四舍五入累积误差
@@ -171,10 +173,10 @@ def check(trades, state, init_cash=1_000_000.0, pool=None):
 
 # ---- CLI：对全部账户跑一遍体检 ----
 def _run_cli():
-    import os
-    import json
     import csv as _csv
-    base = os.path.dirname(os.path.abspath(__file__))
+    import json
+    import os
+    base = str(paths.workspace())
     accounts = [
         ("A组", "state.json", "trades.csv"),
         ("exp1", "experiments/exp1_state.json", "experiments/exp1_trades.csv"),
@@ -196,7 +198,8 @@ def _run_cli():
         if not os.path.exists(spath):
             print(f"  {name}: 未初始化，跳过")
             continue
-        state = json.load(open(spath, encoding="utf-8"))
+        with open(spath, encoding="utf-8") as f:
+            state = json.load(f)
         trades = []
         if os.path.exists(tpath):
             with open(tpath, encoding="utf-8") as f:

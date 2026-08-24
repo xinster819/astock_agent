@@ -17,11 +17,13 @@ A组三路交叉判据（互为佐证）：
      - 若该整点完全没有新行 -> 本轮未产出（截断或未触发）。
   3) 三者时间戳应自洽：fired时刻 < equity时间戳，差值≈实跑耗时(约20s)。
 """
+import datetime as dt
 import os
 import sys
-import datetime as dt
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+from astock.runtime import paths
+
+BASE = str(paths.workspace())
 JLOG = os.path.join(BASE, "jitter_log.csv")
 EQ = os.path.join(BASE, "equity.csv")
 SP = os.path.join(BASE, "spread_log.csv")
@@ -51,7 +53,7 @@ def _rows(path):
         return []
     with open(path, encoding="utf-8") as f:
         lines = f.read().strip().split("\n")
-    return [l.split(",") for l in lines[1:]] if len(lines) > 1 else []
+    return [line.split(",") for line in lines[1:]] if len(lines) > 1 else []
 
 
 def _parse_hms(s):
@@ -122,9 +124,9 @@ def check(target_hour=None):
             t = _hour_of(r[idx])
             # 必须比完整日期。旧实现只比 t.day（几号），每月同一日号会把上个月
             # 的行当成"本轮产物"报「链路正常」—— 恰恰在停摆故障上发虚假绿灯。
-            if t and t.hour == target_hour and t.date() == now.date():
-                if not best or t > best:
-                    best = t
+            if t and t.hour == target_hour and t.date() == now.date() \
+                    and (not best or t > best):
+                best = t
         return best
 
     eq_t = latest_in_hour(_rows(EQ))
@@ -180,9 +182,9 @@ def _latest_row_in_hour(path, target_hour, day):
         if len(cols) < 5:
             continue
         t = _hour_of(cols[0])
-        if t and t.hour == target_hour and t.date() == day:
-            if not best or t > best[0]:
-                best = (t, cols[3], cols[4])
+        if t and t.hour == target_hour and t.date() == day \
+                and (not best or t > best[0]):
+            best = (t, cols[3], cols[4])
     return best, None
 
 

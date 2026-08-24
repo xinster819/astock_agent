@@ -18,8 +18,8 @@ source_health · 数据源健康度熔断（只省延迟，不改判定结果）
 
 纯 stdlib，可注入时钟便于测试。
 """
-import time as _time
 import threading
+import time as _time
 
 DEFAULT_FAIL_THRESHOLD = 3      # 连续失败几次才熔断（容忍偶发抖动）
 DEFAULT_COOLDOWN_SEC = 300      # 熔断多久后放行一次探测（5 分钟）

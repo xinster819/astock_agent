@@ -3,12 +3,17 @@
 数据源优先级：东方财富 push2 实时接口 -> akshare 兜底。
 全部为只读 HTTP 请求，不起任何服务。
 """
-import time
-import json
-import urllib.request
+from __future__ import annotations
+
+import contextlib
 import datetime as dt
+import json
+import os
+import time
+import urllib.request
 
 from astock.runtime import clock as market_time
+from astock.runtime import paths
 
 EM_FIELDS = "f43,f44,f45,f46,f47,f48,f57,f58,f60,f169,f170,f168"
 # f43现价(*100? 实际带小数位f59) 这里改用更稳的字段, 见解析
@@ -66,7 +71,7 @@ def _get_quote_em(code: str, retries=3, retry_wait=0.6):
             if not d:
                 raise ValueError("empty data")
             scale = 10 ** int(d.get("f59", 2) or 2)
-            def px(v):
+            def px(v, scale=scale):     # 绑定当前轮的 scale，不捕获循环变量
                 try:
                     return round(float(v) / scale, 4) if v not in (None, "-", "") else 0.0
                 except Exception:
@@ -110,13 +115,11 @@ def _get_quote_em(code: str, retries=3, retry_wait=0.6):
 CROSS_VALIDATE = True
 DIVERGE_TOL = 0.005   # 多源现价偏差容忍度 0.5%
 
-import os
-SPREAD_LOG = os.path.join(os.path.dirname(__file__), "spread_log.csv")
 
 
 def log_spread(quotes):
     """记录每只票的多源现价与极差，供收盘后校准阈值。只记 >=2 个有效源的票。"""
-    new = not os.path.exists(SPREAD_LOG)
+    new = not os.path.exists(paths.spread_log())
     rows = []
     for code, q in quotes.items():
         srcs = q.get("sources") or {}
@@ -129,7 +132,7 @@ def log_spread(quotes):
                      ";".join(f"{k}={v}" for k, v in srcs.items())))
     if not rows:
         return
-    with open(SPREAD_LOG, "a", encoding="utf-8") as f:
+    with open(paths.spread_log(), "a", encoding="utf-8") as f:
         if new:
             f.write("时间,代码,有效源数,价差%,判定,各源价\n")
         for r in rows:
@@ -138,18 +141,16 @@ def log_spread(quotes):
 
 def calibrate_tol(percentile=99):
     """读 spread_log，给出价差分布与建议阈值（默认取99分位+缓冲）。返回 dict。"""
-    if not os.path.exists(SPREAD_LOG):
+    if not os.path.exists(paths.spread_log()):
         return {"error": "暂无价差日志（尚未交易时段实跑过）"}
     spreads = []
-    with open(SPREAD_LOG, "r", encoding="utf-8") as f:
+    with open(paths.spread_log(), encoding="utf-8") as f:
         next(f, None)
         for line in f:
             parts = line.strip().split(",")
             if len(parts) >= 4:
-                try:
+                with contextlib.suppress(ValueError):
                     spreads.append(float(parts[3]))
-                except Exception:
-                    pass
     if not spreads:
         return {"error": "价差日志为空"}
     spreads.sort()
@@ -171,9 +172,9 @@ def calibrate_tol(percentile=99):
 def load_sample_pool():
     """采样池：用于价差交叉验证统计的大票池（默认沪深300，sample_pool.json）。
     与交易池(watchlist)解耦——交易仍小而精，采样尽可能多以充分校准阈值。"""
-    p = os.path.join(os.path.dirname(__file__), "sample_pool.json")
+    p = str(paths.sample_pool())
     if os.path.exists(p):
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             return json.load(f).get("pool", [])
     return []
 
@@ -205,8 +206,8 @@ def sample_spreads(codes=None):
                      f"sina={v.get('sina')};tencent={v.get('tencent')}"))
     if not rows:
         return 0, 0
-    new = not os.path.exists(SPREAD_LOG)
-    with open(SPREAD_LOG, "a", encoding="utf-8") as f:
+    new = not os.path.exists(paths.spread_log())
+    with open(paths.spread_log(), "a", encoding="utf-8") as f:
         if new:
             f.write("时间,代码,有效源数,价差%,判定,各源价\n")
         for r in rows:
@@ -282,7 +283,7 @@ def get_quote(code: str):
         return out
 
     # 只有1个有效源：降级放行但标记
-    only = list(valid.items())[0]
+    only = next(iter(valid.items()))
     out["price"] = round(only[1], 4)
     out["cross"] = f"single_source({only[0]})"
     return out
@@ -416,7 +417,7 @@ def _index_symbol(code: str) -> str:
     return "sh" + code
 
 
-def get_index_hist(code: str, start: str = None, end: str = None):
+def get_index_hist(code: str, start: str | None = None, end: str | None = None):
     """指数日线历史。多源兜底，返回标准化 DataFrame（含"日期"、"收盘"列）。
 
     源优先级：

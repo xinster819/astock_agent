@@ -12,10 +12,9 @@ trade_guard 的 TDD 测试 —— 执行层幂等/防抖 + 跨进程互斥。
   trade_guard.account_lock(key, ttl_sec=600) 上下文管理器：
      同一 key 同时只允许一个持有者；重复获取抛 LockBusy；异常/正常退出都释放。
 """
-import unittest
 import os
 import time
-import datetime as dt
+import unittest
 
 from astock.guards import trade as tg
 
@@ -67,10 +66,9 @@ class TestAccountLock(unittest.TestCase):
             os.remove(p)
 
     def test_mutual_exclusion(self):
-        with tg.account_lock(self.key):
-            with self.assertRaises(tg.LockBusy):
-                with tg.account_lock(self.key):
-                    pass
+        with tg.account_lock(self.key), self.assertRaises(tg.LockBusy), \
+                tg.account_lock(self.key):
+            pass
 
     def test_release_allows_reacquire(self):
         with tg.account_lock(self.key):

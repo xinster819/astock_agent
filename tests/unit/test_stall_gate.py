@@ -9,11 +9,10 @@ integrity_gate 全绿，唯独从未进入下单分支 —— round 冻结、零
 
 这组用例锁定新增的 stalled_engine 判据，以及"字段缺失时必须沉默"的边界。
 """
-import unittest
 import datetime as dt
+import unittest
 
 from astock.guards import freshness as fg
-
 
 REVIEW_END = dt.datetime(2026, 8, 21, 15, 0)
 REVIEW_START = dt.datetime(2026, 8, 17)

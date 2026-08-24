@@ -7,13 +7,7 @@
   取数失败/空返回给出明确 status，让上层能执行"新闻须新鲜+带源才可作买入依据"的闸门。
 """
 import datetime as dt
-import os
-import sys
 import unittest
-
-BASE = os.path.dirname(os.path.abspath(__file__))
-if BASE not in sys.path:
-    sys.path.insert(0, BASE)
 
 from astock.data import news_feed
 

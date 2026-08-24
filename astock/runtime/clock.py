@@ -28,9 +28,9 @@ market_time · 交易所时钟（单一事实源）
 A 股无夏令时，ZoneInfo 不可用时退回固定 UTC+8，语义完全等价。
 纯 stdlib。
 """
+import datetime as dt
 import os
 import time
-import datetime as dt
 
 MARKET_TZ_NAME = "Asia/Shanghai"
 _FIXED_UTC8 = dt.timezone(dt.timedelta(hours=8), MARKET_TZ_NAME)

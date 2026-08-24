@@ -6,7 +6,6 @@ legacy spellings for the timestamp field.
 """
 import datetime as dt
 
-
 _FRESHNESS_TOLERANCE_TRADING_DAYS = 1
 # 引擎停摆容忍度：连续 2 个交易日没有跑完任何下单轮次即判定停摆。
 # 取 2 而非 1，是为了容忍单日调度失败/超时截断这类偶发抖动。

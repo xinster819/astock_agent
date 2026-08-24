@@ -18,17 +18,19 @@
 对外只暴露 classify() -> RegimeResult(regime, source, degraded, detail)。
 纯 stdlib + market 模块，可被 execute/run_exp import，也可独立体检。
 """
-import os
+import datetime as dt
 import json
 import statistics
-import datetime as dt
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 
 from astock.data import market
 from astock.guards import risk as risk_guard
+from astock.runtime import paths
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-CACHE_FILE = os.path.join(BASE, "market_regime_cache.json")
+
+def _cache_file():
+    """市场状态的 last-known-good 缓存。运行期解析，便于测试重定向。"""
+    return str(paths.workspace() / "market_regime_cache.json")
 
 INDEX_CODE = "000300"          # 沪深300 作为大盘 beta 基准
 LOOKBACK_DAYS = 120            # 取近 120 自然日日线
@@ -74,7 +76,7 @@ def _compute_live():
 
 def _read_cache():
     try:
-        with open(CACHE_FILE, encoding="utf-8") as f:
+        with open(_cache_file(), encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return None
@@ -82,7 +84,7 @@ def _read_cache():
 
 def _write_cache(regime, detail):
     try:
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        with open(_cache_file(), "w", encoding="utf-8") as f:
             json.dump({
                 "regime": regime,
                 "detail": detail,
