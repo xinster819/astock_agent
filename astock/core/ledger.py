@@ -1,5 +1,8 @@
 """ledger · 账本落盘（**唯一** 写 state/trades/equity 的地方）。
 
+通用的落盘机制（原子 JSON 写、CSV 转义）在 `runtime.files`；
+本模块只负责**账本的业务语义**：哪些列、什么顺序、成交怎么翻译成一行。
+
 【三个被修掉的落盘缺陷】
 
 1. **state.json 非原子写**
@@ -25,14 +28,14 @@
 """
 from __future__ import annotations
 
-import csv
 import json
-import os
-import tempfile
-from pathlib import Path
 from typing import Any
 
 from astock.core.rules import Fill
+from astock.runtime.files import append_csv_row, read_csv_rows, write_json_atomic
+
+__all__ = ["EQUITY_COLUMNS", "TRADE_COLUMNS", "Ledger",
+           "append_csv_row", "read_csv_rows", "write_json_atomic"]
 
 #: trades.csv 列定义。顺序即落盘顺序，改动会影响历史文件的可读性——
 #: 只允许在末尾追加列，不允许插入或重排。
@@ -43,46 +46,6 @@ TRADE_COLUMNS = [
 
 #: equity.csv 列定义，约束同上。
 EQUITY_COLUMNS = ["时间", "现金", "持仓市值", "总资产", "累计收益率%"]
-
-
-def write_json_atomic(path: Path, payload: Any) -> None:
-    """原子写 JSON：临时文件 + fsync + os.replace。
-
-    临时文件必须与目标**同目录**——跨文件系统的 os.replace 不是原子操作。
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
-    tmp = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())      # 元数据落盘前先把内容刷到磁盘
-        os.replace(tmp, path)         # POSIX 原子换名
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-
-
-def append_csv_row(path: Path, columns: list[str], row: list[Any]) -> None:
-    """向 CSV 追加一行，文件不存在时先写表头。转义交给 csv 模块。"""
-    if len(row) != len(columns):
-        raise ValueError(f"{path.name}: 期望 {len(columns)} 列，收到 {len(row)} 列")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    is_new = not path.exists()
-    with path.open("a", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        if is_new:
-            writer.writerow(columns)
-        writer.writerow(row)
-
-
-def read_csv_rows(path: Path) -> list[dict[str, str]]:
-    """读回 CSV。文件不存在返回空列表——账户尚未开张不是错误。"""
-    if not path.exists():
-        return []
-    with path.open("r", encoding="utf-8", newline="") as f:
-        return list(csv.DictReader(f))
 
 
 class Ledger:

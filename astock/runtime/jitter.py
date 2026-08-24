@@ -21,8 +21,8 @@ import random
 import time
 from datetime import datetime
 
-from astock.core.ledger import append_csv_row
 from astock.runtime import paths
+from astock.runtime.files import append_csv_row
 
 JITTER_COLUMNS = ["唤醒时刻", "计划延时s", "实际开跑时刻", "实际延时s", "状态"]
 
