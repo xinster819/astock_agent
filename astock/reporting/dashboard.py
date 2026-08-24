@@ -10,78 +10,23 @@
 用法：python3 dashboard.py            # 生成 dashboard.html
       python3 dashboard.py --no-live  # 跳过实时行情(用成本价占位，快速出图)
 """
-import csv
 import datetime as dt
 import json
-import os
-import re
 import sys
 
-from astock.runtime import paths
+from astock.reporting import metrics, roster
+from astock.runtime import files, paths
 
-BASE = str(paths.workspace())
-
-
-# 账户清单： (展示名, 策略说明, state路径, equity路径, trades路径, 颜色)
-ACCOUNTS = [
-    ("A组·纯规则对照", "基准对照组(纯规则自动交易)",
-     "state.json", "equity.csv", "trades.csv", "#64748b"),
-    ("exp1·基准策略", "原始均线趋势跟踪",
-     "experiments/exp1_state.json", "experiments/exp1_equity.csv", "experiments/exp1_trades.csv", "#3b82f6"),
-    ("exp2·放宽买入", "降低买入门槛，更快入场",
-     "experiments/exp2_state.json", "experiments/exp2_equity.csv", "experiments/exp2_trades.csv", "#22c55e"),
-    ("exp3·严格趋势", "只抓强趋势，提高胜率",
-     "experiments/exp3_state.json", "experiments/exp3_equity.csv", "experiments/exp3_trades.csv", "#f59e0b"),
-    ("exp4·金叉策略", "MA5上穿MA20金叉买入",
-     "experiments/exp4_state.json", "experiments/exp4_equity.csv", "experiments/exp4_trades.csv", "#ef4444"),
-    ("exp5·纯动量", "趋势与量能确认的动量策略",
-     "experiments/exp5_state.json", "experiments/exp5_equity.csv", "experiments/exp5_trades.csv", "#a855f7"),
-    ("exp6·状态适配趋势", "仅在正常市场环境运行的低仓位趋势策略",
-     "experiments/exp6_state.json", "experiments/exp6_equity.csv", "experiments/exp6_trades.csv", "#06b6d4"),
-    ("exp7·均值回归", "中期趋势内的超卖反弹策略",
-     "experiments/exp7_state.json", "experiments/exp7_equity.csv", "experiments/exp7_trades.csv", "#84cc16"),
-    ("exp8·质量突破", "趋势、突破与成交量确认策略",
-     "experiments/exp8_state.json", "experiments/exp8_equity.csv", "experiments/exp8_trades.csv", "#f97316"),
-    ("exp9·多因子排序", "门槛入围后按合成因子分择强的横截面选股策略",
-     "experiments/exp9_state.json", "experiments/exp9_equity.csv", "experiments/exp9_trades.csv", "#14b8a6"),
-    ("B组·Agent决策", "规则做护栏，agent做最终买卖判断",
-     "groupB/state.json", "groupB/equity.csv", "groupB/trades.csv", "#ec4899"),
-    ("C组·多空辩论", "规则做护栏，多智能体多空辩论后做最终买卖判断",
-     "groupC/state.json", "groupC/equity.csv", "groupC/trades.csv", "#8b5cf6"),
-    ("D组·新闻情绪", "规则做护栏，结合新闻情绪面做最终买卖判断",
-     "groupD/state.json", "groupD/equity.csv", "groupD/trades.csv", "#0ea5e9"),
-]
-
-# 卖出备注里形如 "盈亏-8733.24" / "盈亏 123.4" 的已实现盈亏
-_PNL_RE = re.compile(r"盈亏\s*([+-]?\d+(?:\.\d+)?)")
-
-
-def _read_state(p):
-    fp = os.path.join(BASE, p)
-    if not os.path.exists(fp):
-        return None
-    try:
-        return json.load(open(fp, encoding="utf-8"))
-    except Exception:
-        return None
-
-
-def _read_csv(p):
-    fp = os.path.join(BASE, p)
-    if not os.path.exists(fp):
-        return []
-    try:
-        with open(fp, encoding="utf-8") as f:
-            return list(csv.DictReader(f))
-    except Exception:
-        return []
-
-
-def _fnum(x, d=0.0):
-    try:
-        return float(x)
-    except Exception:
-        return d
+#: 每个账户在曲线图上的颜色。**纯展示**，所以留在看板里，
+#: 不进 roster——weekly 产出的是 JSON，不该被迫携带配色。
+SERIES_COLORS = {
+    "A":    "#64748b",
+    "exp1": "#3b82f6", "exp2": "#22c55e", "exp3": "#f59e0b",
+    "exp4": "#ef4444", "exp5": "#a855f7", "exp6": "#06b6d4",
+    "exp7": "#84cc16", "exp8": "#f97316", "exp9": "#14b8a6",
+    "B":    "#ec4899", "C": "#8b5cf6", "D": "#0ea5e9",
+}
+FALLBACK_COLOR = "#94a3b8"
 
 
 def collect_live_prices(need_codes, use_live=True):
@@ -107,20 +52,24 @@ def collect(use_live=True):
     # 先汇总所有账户的持仓代码，一次性取价（避免每组重复请求）
     need_codes = set()
     raw = []
-    for name, desc, sp, ep, tp, color in ACCOUNTS:
-        st = _read_state(sp)
-        eq = _read_csv(ep)
-        tr = _read_csv(tp)
-        raw.append((name, desc, color, st, eq, tr))
+    for account in roster.roster():
+        st = files.read_json(account.paths.state)
+        eq = files.read_csv_rows(account.paths.equity)
+        tr = files.read_csv_rows(account.paths.trades)
+        raw.append((account, st, eq, tr))
         if st:
             need_codes |= set(st.get("positions", {}).keys())
 
     live, live_status = collect_live_prices(need_codes, use_live)
 
     data = []
-    for name, desc, color, st, eq, tr in raw:
+    for account, st, eq, tr in raw:
+        name = account.label
+        desc = account.desc
+        color = SERIES_COLORS.get(account.account, FALLBACK_COLOR)
         if st is None:
             data.append({
+                "account": account.account,
                 "name": name, "desc": desc, "color": color,
                 "exists": False, "init": 1_000_000.0, "cash": 1_000_000.0,
                 "mv": 0.0, "total": 1_000_000.0, "ret": 0.0, "round": 0,
@@ -162,8 +111,8 @@ def collect(use_live=True):
         if not live and eq:
             try:
                 last = eq[-1]
-                mv = _fnum(last.get("持仓市值"), mv_cost)
-                total = _fnum(last.get("总资产"), cash + mv_cost)
+                mv = metrics.to_float(last.get("持仓市值"), mv_cost)
+                total = metrics.to_float(last.get("总资产"), cash + mv_cost)
             except Exception:
                 pass
         ret = (total / init - 1) * 100 if init else 0.0
@@ -173,15 +122,16 @@ def collect(use_live=True):
         realized = 0.0
         win = loss = 0
         for r in tr:
-            if "卖" in r.get("方向", ""):
-                m = _PNL_RE.search(r.get("备注", ""))
-                if m:
-                    v = _fnum(m.group(1))
-                    realized += v
-                    if v > 0:
-                        win += 1
-                    elif v < 0:
-                        loss += 1
+            if "卖" not in r.get("方向", ""):
+                continue
+            pnl = metrics.extract_realized_pnl(r.get("备注", ""))
+            if pnl is None:
+                continue
+            realized += pnl
+            if pnl > 0:
+                win += 1
+            elif pnl < 0:
+                loss += 1
         realized = round(realized, 2)
 
         # ---- equity 曲线点 ----
@@ -189,8 +139,8 @@ def collect(use_live=True):
         for r in eq:
             try:
                 ecurve.append({"t": r.get("时间", ""),
-                               "total": _fnum(r.get("总资产")),
-                               "ret": _fnum(r.get("累计收益率%"))})
+                               "total": metrics.to_float(r.get("总资产")),
+                               "ret": metrics.to_float(r.get("累计收益率%"))})
             except Exception:
                 continue
 
@@ -198,17 +148,17 @@ def collect(use_live=True):
         trades = []
         for r in tr[-30:][::-1]:
             note = r.get("备注", "")
-            m = _PNL_RE.search(note)
             trades.append({
                 "t": r.get("时间", ""), "side": r.get("方向", ""),
                 "code": r.get("代码", ""), "name": r.get("名称", ""),
                 "price": r.get("价格", ""), "qty": r.get("数量", ""),
                 "amount": r.get("成交额", ""),
-                "pnl": round(_fnum(m.group(1)), 2) if m else None,
+                "pnl": metrics.extract_realized_pnl(note),
                 "note": note,
             })
 
         data.append({
+            "account": account.account,
             "name": name, "desc": desc, "color": color, "exists": True,
             "init": init, "cash": round(cash, 2), "mv": round(mv, 2),
             "total": round(total, 2), "ret": round(ret, 3),
@@ -286,14 +236,23 @@ def _regime_banner_html():
     )
 
 
-def render(data, live_status):
+def render(data, live_status, use_live=True):
+    """把采集结果渲染成看板 HTML，返回输出路径。
+
+    `use_live=False` 时连市场状态横幅也不联网——`--offline` 必须是真的离线，
+    否则"离线生成看板"会在断网时挂住几十秒再超时。
+    """
     gen_ts = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     payload = json.dumps(data, ensure_ascii=False)
+    banner = _regime_banner_html() if use_live else (
+        '<div class="regime regime-unknown"><div class="rg-main">'
+        '<span class="rg-dot"></span><b>市场状态：未取</b>'
+        '<span class="rg-sub">离线生成（--offline）</span></div></div>')
     html = (HTML_TEMPLATE
             .replace("__DATA__", payload)
             .replace("__TS__", gen_ts)
-            .replace("__LIVE__", live_status)
-            .replace("__REGIME__", _regime_banner_html()))
+            .replace("__LIVE__", str(live_status))
+            .replace("__REGIME__", banner))
     out = paths.dashboard_html()
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8") as f:

@@ -37,6 +37,22 @@ def write_json_atomic(path: Path, payload: Any) -> None:
         raise
 
 
+def read_json(path: Path, default: Any = None) -> Any:
+    """只读 JSON。文件不存在或坏掉返回 default。
+
+    ⚠ 报表层专用：它必须能读一个**不存在**的账户而不产生任何副作用。
+    `Account.open()` 在账本缺失时会初始化并落盘——那是交易入口的正确行为，
+    但报表调用它就等于"看一眼报表就把 13 个账户全开了户"。
+    """
+    if not path.exists():
+        return default
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
 def append_csv_row(path: Path, columns: list[str], row: list[Any]) -> None:
     """向 CSV 追加一行，文件不存在时先写表头。转义交给 csv 模块。
 

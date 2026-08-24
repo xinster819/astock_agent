@@ -88,7 +88,9 @@ def cmd_execute(args) -> int:
 def cmd_report(args) -> int:
     from astock.reporting import report
 
-    print(report.account_report(args.account) if args.account else report.summary_table())
+    use_live = not args.offline
+    print(report.account_report(args.account, use_live=use_live) if args.account
+          else report.summary_table(use_live=use_live))
     return 0
 
 
@@ -102,16 +104,19 @@ def cmd_check(args) -> int:
 def cmd_dashboard(args) -> int:
     from astock.reporting import dashboard
 
-    data = dashboard.collect(use_live=not args.offline)
-    path = dashboard.render(data, live_status=not args.offline)
+    use_live = not args.offline
+    data, live_status = dashboard.collect(use_live=use_live)
+    path = dashboard.render(data, live_status=live_status, use_live=use_live)
     print(f"看板已生成: {path}")
     return 0
 
 
 def cmd_weekly(args) -> int:
+    """周度复盘数据底座。"""
     from astock.reporting import weekly
 
-    return weekly.main() or 0
+    weekly.main(week_str=args.week, use_live=not args.offline)
+    return 0
 
 
 def cmd_stall_check(args) -> int:
@@ -168,6 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     report = sub.add_parser("report", help="账户报告；省略账户则输出 13 账户汇总表")
     report.add_argument("account", nargs="?", default=None)
+    report.add_argument("--offline", action="store_true", help="不拉实时行情，按成本估值")
     report.set_defaults(func=cmd_report)
 
     check = sub.add_parser("check", help="账本完整性体检")
@@ -178,6 +184,8 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard.set_defaults(func=cmd_dashboard)
 
     weekly = sub.add_parser("weekly", help="周度复盘数据采集")
+    weekly.add_argument("--week", default=None, help="指定 ISO 周，如 2026-W34；省略取本周")
+    weekly.add_argument("--offline", action="store_true", help="不拉实时指数")
     weekly.set_defaults(func=cmd_weekly)
 
     stall = sub.add_parser("stall-check", help="引擎停摆自检（每轮收尾跑）")

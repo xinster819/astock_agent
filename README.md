@@ -282,6 +282,10 @@ astock/
     integrity.py  trades 重放对账 / 现金单调性 / 负现金
     freshness.py  权益新鲜度 + 引擎停摆检测
     regime.py     市场状态（live → 缓存 → 冷启动默认，降级显式标记）
+  reporting/   只读产出层，绝不写账本
+    roster.py         13 个账户的名册，名称以 config 为权威
+    metrics.py        周窗口 / 权益取点 / 胜负统计（纯函数）
+    report.py  weekly.py  dashboard.py
   strategy/    信号生成（纯计算，不做 IO 决策）
     families.py       9 种买入信号族的注册表，一族一个纯函数
     signals.py        共用的卖出逻辑、仓位再平衡、下单量计算
