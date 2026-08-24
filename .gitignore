@@ -1,0 +1,102 @@
+# ============================================================================
+# astock_agent · .gitignore
+# ============================================================================
+
+# ---- 🔴 虚拟环境：体积大，且含企业自签根证书，绝不能上传 ----
+# .venv/ssl/ca-bundle.pem 可能含从本机系统钥匙串导出的企业自签根 CA，
+# 公开它等于暴露所在网络的安全基础设施；
+# .venv/lib/*/site-packages/sitecustomize.py 也记录了企业网络 TLS 中间人的应对方式。
+# 重建方式见 RUNBOOK.md 第二节，不需要也不应该进版本库。
+.venv/
+venv/
+env/
+ENV/
+
+# ---- 证书 / 私钥：任何情况下都不入库 ----
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+ca-bundle*
+
+# ---- Python 运行期产物 ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# ---- 本系统的运行期状态（含本机绝对路径/主机信息）----
+.locks/
+logs/
+scheduler_audit.jsonl
+
+# ---- 大体积可重生成的审计日志 ----
+# 纯行情价差记录，重跑会自动重新累积（README_MIGRATION 第 6 节已说明不随迁移打包）
+spread_log.csv
+
+# ---- 改动前的自动备份，不入库 ----
+*.bak
+*.bak.*
+
+# ---- 本机 / 编辑器 ----
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# ============================================================================
+# ---- 🔒 账本与运行数据层：按项目决定不同步 ----
+# 交易记录、持仓、权益曲线、Agent 决策、周度复盘都属于运行产物，
+# 不随代码公开。首次运行时 broker.load_state() / exp_manager.load_exp_state()
+# 会自动以 100 万初始现金初始化，系统可从零开始跑，不依赖这些文件。
+# ============================================================================
+
+# 成交流水 / 权益曲线 / 持仓现金状态（A组 + exp1~9 + B/C/D）
+trades.csv
+equity.csv
+state.json
+experiments/*_trades.csv
+experiments/*_equity.csv
+experiments/*_state.json
+group*/trades.csv
+group*/equity.csv
+group*/state.json
+
+# Agent 决策输入输出与归档
+group*/decision_*.json
+group*/decision_log.csv
+
+# 周度数据底座与复盘正文
+weekly_data_*.json
+report_body*.xml
+report_body*.txt
+
+# 观测站产物与其它运行期状态
+dashboard.html
+market_regime_cache.json
+jitter_log.csv
+
+# ---- 📄 交接/复盘文档：按项目决定不同步 ----
+# 这些文档内嵌了 13 个账户的收益率表、持仓明细与成交举例，
+# 与账本属于同一份信息；且含交接期的内部上下文。
+# 仓库对外只保留新写的 README.md（无任何账本数字）。
+*.md
+!README.md
+
+# ============================================================================
+# 【有意保留在版本库里的】——代码、配置与文档：
+#   *.py                     全部引擎/策略/闸门/测试代码
+#   experiments/exp*.json    各实验组策略参数
+#   sample_pool.json         价差采样池（沪深300 代码表，公开信息）
+#   requirements.txt         依赖
+#   scheduler_tick.sh / install_scheduler.sh / com.astock.agent.plist   调度
+#   README.md                新写的对外说明（无账本数字）
+# ============================================================================

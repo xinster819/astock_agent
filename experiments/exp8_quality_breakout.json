@@ -1,0 +1,29 @@
+{
+  "name": "质量突破",
+  "desc": "趋势、MA20突破与成交量确认共同触发，减少假突破与追高",
+  "ma_fast": 5,
+  "ma_mid": 10,
+  "ma_slow": 20,
+  "max_positions": 3,
+  "max_weight": 0.1,
+  "max_new_per_round": 1,
+  "stop_loss": -0.06,
+  "take_profit": 0.15,
+  "momentum_threshold": 0.03,
+  "signal_logic": "quality_breakout",
+  "min_volume_ratio": 1.1,
+  "cash": 1000000,
+  "init_cash": 1000000,
+  "max_breakout_distance": 0.04,
+  "time_stop_days": 10,
+  "time_stop_min_pnl": 0.0,
+  "market_regime_fallback": "risk_off",
+  "risk_guard": {
+    "daily_loss_limit": 0.015,
+    "max_drawdown": 0.08,
+    "consecutive_loss_limit": 2,
+    "loss_cooldown_trades": 3,
+    "stop_loss_cooldown_trades": 3
+  },
+  "breakout_relaxed": true
+}

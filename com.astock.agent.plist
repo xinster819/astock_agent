@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  astock_agent 调度（macOS launchd LaunchAgent）
+
+  为什么用 launchd 而不是 cron：
+    · 本机是笔记本，会休眠。launchd 在唤醒后会补跑错过的 StartCalendarInterval，
+      cron 不会 —— 睡一觉起来就少了一轮，而且不报错。
+    · macOS 的 cron 对 crontab 内 TZ= 支持不可靠。
+
+  为什么每小时唤醒而不是只在特定时刻：
+    本机时区 America/Los_Angeles 与北京相差 15/16 小时，随美国夏令时漂移。
+    把北京时刻硬换算成本地时刻写死，每年 DST 切换两次都会静默错开一小时。
+    改为每小时唤醒，由 scheduler_tick.sh 用 market_time 取北京时间自行判定，
+    时区漂移免疫。非交易时刻脚本会立即静默退出，开销可忽略。
+
+  ⚠️ 项目路径不能放在 ~/Desktop / ~/Documents / ~/Downloads 下！
+    这些目录受 macOS TCC 保护，launchd 拉起的进程读不到里面的文件，
+    只会在 launchd.err.log 里留下 "Operation not permitted"，而 tick 日志
+    根本不会生成 —— 又是一次静默失效。2026-08-24 实测踩过，故项目已迁到
+    不受保护的位置（如 ~/AI_Projects/，家目录根不受 TCC 保护）。
+
+  ⚠️ 本文件是【模板】：__PROJECT_DIR__ 需替换成你的项目绝对路径。
+     launchd 不展开 ~ 和环境变量，必须写绝对路径。
+     用配套脚本安装即可自动替换：
+       ./install_scheduler.sh
+  卸载：
+    launchctl unload ~/Library/LaunchAgents/com.astock.agent.plist
+    rm ~/Library/LaunchAgents/com.astock.agent.plist
+  查看状态：
+    launchctl list | grep astock
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.astock.agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PROJECT_DIR__/scheduler_tick.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_DIR__</string>
+
+    <!-- 每小时的第 5 分唤醒一次；跑不跑由 scheduler_tick.sh 按北京时间判定 -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Minute</key>
+        <integer>5</integer>
+    </dict>
+
+    <!-- 休眠错过的轮次，唤醒后补跑一次 -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__PROJECT_DIR__/logs/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__PROJECT_DIR__/logs/launchd.err.log</string>
+
+    <!-- 单轮最长约 25 分钟（13 个账户 × 50 只票 × 多源取价），留足余量 -->
+    <key>ExitTimeOut</key>
+    <integer>2400</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

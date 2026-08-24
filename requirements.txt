@@ -1,0 +1,15 @@
+# A股多策略模拟交易系统 —— 运行依赖
+# 标准库以外仅需以下两个第三方包。
+# 安装：pip install -r requirements.txt
+#
+# 说明：
+#  - akshare 提供行情/新闻数据源（market.py 多源交叉验证、news_feed.py 个股新闻）。
+#    当前代码依赖 stock_news_em；已在 news_feed._default_fetch 中用
+#    pd.set_option("mode.string_storage","python") 规避某些 akshare 版本的
+#    pandas/pyarrow str.replace 崩溃。若你的 akshare 版本行为不同，按注释调整。
+#  - pandas 为 akshare 依赖，同时被 news_feed / strategy 直接使用。
+#  - numpy 通常随 pandas 自动安装，这里显式列出以防最小环境缺失。
+
+akshare>=1.12.0
+pandas>=1.5.0
+numpy>=1.23.0
