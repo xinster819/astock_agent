@@ -20,6 +20,7 @@ import os
 import random
 import time
 from datetime import datetime
+from typing import Callable
 
 from astock.runtime import paths
 from astock.runtime.files import append_csv_row
@@ -37,7 +38,8 @@ def bounds() -> tuple[int, int]:
     return (lo, hi) if lo <= hi else (hi, lo)
 
 
-def sleep_with_jitter(*, enabled: bool = True, printer=print) -> int:
+def sleep_with_jitter(*, enabled: bool = True,
+                      printer: Callable[[str], object] = print) -> int:
     """随机延时后返回实际睡了多少秒。enabled=False 时立即返回 0。"""
     if not enabled:
         return 0

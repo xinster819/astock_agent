@@ -119,7 +119,7 @@ def _golden_cross(closes, fast=MA_FAST, slow=MA_SLOW):
 # 缓存同时修掉一个隐蔽的不一致：同一轮内先后两次取数可能拿到不同的当日 bar，
 # 导致"卖出用一个价、买入用另一个价"。缓存后一轮=一个一致快照。
 # 由各入口（run_once / _run_experiment_locked / build）在轮首显式清空。
-_IND_CACHE = {}
+_IND_CACHE: dict = {}
 
 
 def clear_indicator_cache():

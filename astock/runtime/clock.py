@@ -28,21 +28,24 @@ market_time · 交易所时钟（单一事实源）
 A 股无夏令时，ZoneInfo 不可用时退回固定 UTC+8，语义完全等价。
 纯 stdlib。
 """
+from __future__ import annotations
+
 import datetime as dt
 import os
 import time
+from typing import Callable
 
 MARKET_TZ_NAME = "Asia/Shanghai"
 _FIXED_UTC8 = dt.timezone(dt.timedelta(hours=8), MARKET_TZ_NAME)
 
 try:                                    # 3.9+ 标准库；缺 tzdata 的最小环境会失败
     from zoneinfo import ZoneInfo
-    MARKET_TZ = ZoneInfo(MARKET_TZ_NAME)
+    MARKET_TZ: dt.tzinfo = ZoneInfo(MARKET_TZ_NAME)
 except Exception:                       # A股无夏令时，固定 +8 与 IANA 定义等价
     MARKET_TZ = _FIXED_UTC8
 
 
-def enforce():
+def enforce() -> bool:
     """把进程本地时区钉死为交易所时区。入口脚本应在最早处调用。
 
     幂等、可重复调用。返回 True 表示进程本地时区确已生效为 UTC+8。
@@ -55,12 +58,12 @@ def enforce():
     return offset_ok()
 
 
-def offset_ok():
+def offset_ok() -> bool:
     """进程本地时区当前是否等于 UTC+8。用于启动自检。"""
     return dt.datetime.now().astimezone().utcoffset() == dt.timedelta(hours=8)
 
 
-def verify(printer=print):
+def verify(printer: Callable[[str], object] = print) -> bool:
     """启动自检：进程时区不对就大声说出来，绝不静默降级。
 
     这次事故的教训是"静默失效"——闸门全绿、报告照出，唯独引擎没转。
@@ -78,7 +81,7 @@ def verify(printer=print):
     return False
 
 
-def to_market(value=None):
+def to_market(value: dt.datetime | None = None) -> dt.datetime:
     """把任意 datetime 归一到交易所时区，返回带时区的 datetime。
 
     value 为 None -> 取当前时刻。
@@ -91,12 +94,12 @@ def to_market(value=None):
     return value.astimezone(MARKET_TZ)
 
 
-def now():
+def now() -> dt.datetime:
     """带时区的"现在"（交易所时区）。"""
     return dt.datetime.now(MARKET_TZ)
 
 
-def naive_now():
+def naive_now() -> dt.datetime:
     """交易所墙上时间，去掉 tzinfo。
 
     ⚠ 只用于生成【展示/落盘的字符串】。不要拿它做 .timestamp() 或与进程本地
@@ -106,12 +109,12 @@ def naive_now():
     return now().replace(tzinfo=None)
 
 
-def today():
+def today() -> str:
     """交易所日期 YYYY-MM-DD。"""
     return now().strftime("%Y-%m-%d")
 
 
-def stamp():
+def stamp() -> str:
     """交易所时间戳 YYYY-MM-DD HH:MM:SS。"""
     return now().strftime("%Y-%m-%d %H:%M:%S")
 

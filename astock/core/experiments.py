@@ -58,7 +58,7 @@ def validate_config(exp_id: str, config: dict[str, Any]) -> dict[str, Any]:
     """
     logic = config.get("signal_logic")
     declared = config.get("ma_slow")
-    expected = _SLOW_MA_BY_LOGIC.get(logic)
+    expected = _SLOW_MA_BY_LOGIC.get(logic) if isinstance(logic, str) else None
     if declared is not None and expected is not None and int(declared) != expected:
         raise ConfigError(
             f"{exp_id}: ma_slow={declared} 与 signal_logic={logic}（隐含慢线 {expected}）"

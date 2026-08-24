@@ -18,6 +18,8 @@
 对外只暴露 classify() -> RegimeResult(regime, source, degraded, detail)。
 纯 stdlib + market 模块，可被 execute/run_exp import，也可独立体检。
 """
+from __future__ import annotations
+
 import datetime as dt
 import json
 import statistics
@@ -45,7 +47,7 @@ class RegimeResult:
     source: str          # live / cache / cold_start_default
     degraded: bool       # True = 非本次真实计算，调用方/看板应标红
     detail: str          # 人类可读的说明（含指标值或降级原因）
-    metrics: dict = None  # 结构化底层指标(index_return_20d/volatility_20d/drawdown_from_peak/asof…)，冷启动为空
+    metrics: dict | None = None  # 结构化底层指标(index_return_20d/volatility_20d/drawdown_from_peak/asof…)，冷启动为空
 
     def as_dict(self):
         return asdict(self)

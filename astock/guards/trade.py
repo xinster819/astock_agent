@@ -116,7 +116,7 @@ def guarded_run(state, account_key, now=None,
 
 if __name__ == "__main__":
     # 自检
-    st = {}
+    st: dict = {}
     print(can_execute(st, now=1000.0))
     print(can_execute(st, now=1005.0))
     print(can_execute(st, now=1100.0))
