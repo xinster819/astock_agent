@@ -1,145 +1,171 @@
+"""clean_ghost_trades · 清洗历史遗留的并发幽灵成交（幂等、可回滚、清完自检）。
+
+【背景】
+下单流程曾是无锁的"读 state → 下单 → 写 state"，两进程数秒内并发时各自下单、
+后写覆盖先写 → trades.csv 多记了「幽灵行」，而 state.json 只留最后一次写的结果。
+根因已由 `guards.trade` 的执行层互斥 + 冷却去抖修复，本脚本只负责清理历史脏账。
+
+【清洗判据（确定性、零主观）】
+  1. 找出同 (代码, 方向) 在 `DUP_WINDOW_SEC` 内重复的行；
+  2. 对每组重复**删较早的一行、保留较晚的一行**——因为后写覆盖先写，
+     state.json 记的是最后一次写，且后续正常交易的现金链接在存活行之上；
+  3. 删完重放 trades，净持仓必须与 state.json 完全一致，否则**回滚不写盘**。
+
+【安全】
+  · 先备份 `<file>.bak.<时间戳>`
+  · 只有"清完后闸门判 clean 且账实一致"才写回
+  · 幂等：已 clean 的账户直接跳过
+  · `--dry-run` 只预演
+
+【重构中修掉的四个问题】
+  1. 账户表只列了 A / exp1~exp5 / B 共 6 个，**exp6~exp9 与 C/D 组的幽灵成交
+     永远清不到**。这是同一份账户名单在仓库里的第五处硬编码。现在走 `paths.all_accounts()`。
+  2. `main()` 用 `os.system("python3 .../integrity_gate.py")` 做清洗后复检——
+     那个文件在分包后已不存在，复检**静默什么也没做**。何况它调的是系统 python3
+     而非虚拟环境。现在直接调用 `integrity.check`。
+  3. `BASE` 是模块级常量，import 期就把工作区钉死，测试无法重定向。
+  4. 判重用 `0 <= gap`，账本时间戳倒序时会漏判——与 `guards.integrity` 同源的问题。
 """
-clean_ghost_trades · 清洗并发幽灵成交（幂等、可回滚、清完自检）
-=====================================================================
-背景：run_experiment/execute 曾是无锁的"读state→下单→写state"，两进程数秒内并发时
-各自下单、后写覆盖先写 → trades.csv 多记了"幽灵行"，而 state.json 只留最后一次写的结果。
-（根因已由 trade_guard 的执行层互斥+冷却去抖修复，本脚本只负责清理历史脏账。）
+from __future__ import annotations
 
-清洗判据（确定性、零主观）：
-  1. 用 integrity_gate 找出同(代码,方向) 在 DUP_WINDOW_SEC 内重复的行；
-  2. 对每组重复，**删较早的那一行、保留较晚的一行** —— 因为后写覆盖先写，
-     state.json 记录的是"最后一次写"，且后续正常交易的现金链是接在存活行之上的；
-  3. 删完重放 trades，其净持仓/现金必须与 state.json 完全一致（<1元容差），否则回滚。
-
-安全：
-  - 先备份 <file>.bak.<时间戳>；
-  - 只有"清完后 integrity_gate 判 clean 且账实一致"才写回，否则保持原样并报错；
-  - 幂等：已 clean 的账户直接跳过。
-
-用法：
-  python3 clean_ghost_trades.py            # 清洗 exp3/exp4/exp5（自动检测所有脏账户）
-  python3 clean_ghost_trades.py --dry-run  # 只预演，不写盘
-"""
 import csv
 import datetime as dt
-import json
-import os
-import shutil
-import sys
+from dataclasses import dataclass
+from pathlib import Path
 
-from astock.guards import integrity as ig
-from astock.runtime import paths
+from astock.guards import integrity
+from astock.runtime import files, paths
+from astock.runtime.paths import AccountPaths
 
-BASE = str(paths.workspace())
-WIN = ig.DUP_WINDOW_SEC
+WINDOW_SEC = integrity.DUP_WINDOW_SEC
 
 
-def _accounts():
-    accts = [("A组", "state.json", "trades.csv")]
-    for e in ("exp1", "exp2", "exp3", "exp4", "exp5"):
-        accts.append((e, f"experiments/{e}_state.json", f"experiments/{e}_trades.csv"))
-    accts.append(("B组", "groupB/state.json", "groupB/trades.csv"))
-    return accts
+@dataclass
+class CleanResult:
+    """一个账户的清洗结果。`changed` 为真才动过磁盘。"""
+
+    account: str
+    message: str
+    changed: bool = False
+    dropped: list[int] | None = None
+    backup: Path | None = None
+
+    def __str__(self) -> str:
+        return f"  {self.account}: {self.message}"
 
 
-def _read_trades(path):
-    with open(path, encoding="utf-8") as f:
-        r = csv.reader(f)
-        header = next(r)
-        rows = [dict(zip(header, line)) for line in r]
-    return header, rows
+def ghost_row_indices(rows: list[dict]) -> set[int]:
+    """返回应删除的行下标：每组窗口内重复，删较早的一行。
 
-
-def _parse(s):
-    return ig._parse_ts(s)
-
-
-def _ghost_row_indices(rows):
-    """返回应删除的行下标集合：每组同(代码,方向)窗口内重复，删较早的一行。"""
-    last = {}
-    drop = set()
-    for i, r in enumerate(rows):
-        key = ((r.get("代码") or "").strip(), (r.get("方向") or "").strip())
-        t = _parse(r.get("时间"))
-        if not t:
+    间隔取绝对值——账本里的成交时间戳可能倒序（历史上时间列记的是取价时刻
+    而非成交时刻），只判 `0 <= gap` 会漏掉倒序的那一半重复行。
+    """
+    last: dict[tuple[str, str], tuple[int, dt.datetime]] = {}
+    drop: set[int] = set()
+    for index, row in enumerate(rows):
+        key = ((row.get("代码") or "").strip(), (row.get("方向") or "").strip())
+        at = integrity._parse_ts(row.get("时间"))
+        if not at:
             continue
         if key in last:
-            pi, pt = last[key]
-            if 0 <= (t - pt).total_seconds() <= WIN:
-                drop.add(pi)          # 删较早那一行（先写被覆盖）
-        last[key] = (i, t)
+            prev_index, prev_at = last[key]
+            if abs((at - prev_at).total_seconds()) <= WINDOW_SEC:
+                drop.add(min(prev_index, index))   # 删较早写入的那一行
+        last[key] = (index, at)
     return drop
 
 
-def _replay(rows):
-    qty = {}
-    for r in rows:
-        q = ig._i(r.get("数量"))
-        side = (r.get("方向") or "").strip()
+def replay_positions(rows: list[dict]) -> dict[str, int]:
+    """重放成交流水，算出净持仓。数量为 0 的票不计入。"""
+    qty: dict[str, int] = {}
+    for row in rows:
+        code = (row.get("代码") or "").strip()
+        side = (row.get("方向") or "").strip()
+        amount = integrity._i(row.get("数量"))
         if side == "买入":
-            qty[r["代码"]] = qty.get(r["代码"], 0) + q
+            qty[code] = qty.get(code, 0) + amount
         elif side == "卖出":
-            qty[r["代码"]] = qty.get(r["代码"], 0) - q
-    return {k: v for k, v in qty.items() if v != 0}
+            qty[code] = qty.get(code, 0) - amount
+    return {code: n for code, n in qty.items() if n != 0}
 
 
-def clean_account(name, spath, tpath, dry_run=False):
-    spath = os.path.join(BASE, spath)
-    tpath = os.path.join(BASE, tpath)
-    if not (os.path.exists(spath) and os.path.exists(tpath)):
-        return f"  {name}: 文件缺失，跳过"
+def _state_positions(state: dict) -> dict[str, int]:
+    return {code: integrity._i(p.get("qty"))
+            for code, p in (state.get("positions") or {}).items()
+            if integrity._i(p.get("qty")) != 0}
 
-    with open(spath, encoding="utf-8") as f:
-        state = json.load(f)
-    header, rows = _read_trades(tpath)
 
-    before = ig.check(rows, state, init_cash=state.get("init_cash", 1_000_000.0))
+def clean_account(account_paths: AccountPaths, *, dry_run: bool = False) -> CleanResult:
+    """清洗一个账户。只有清完自检通过才写盘，否则原样保留并说明原因。"""
+    name = account_paths.account
+    state = files.read_json(account_paths.state)
+    if state is None or not account_paths.trades.exists():
+        return CleanResult(name, "文件缺失，跳过")
+
+    rows = files.read_csv_rows(account_paths.trades)
+    init_cash = state.get("init_cash", 1_000_000.0)
+
+    before = integrity.check(rows, state, init_cash=init_cash)
     if before["clean"]:
-        return f"  {name}: ✅ 本就 clean，无需清洗"
+        return CleanResult(name, "✅ 本就 clean，无需清洗")
 
-    drop = _ghost_row_indices(rows)
+    drop = ghost_row_indices(rows)
     if not drop:
-        return (f"  {name}: 🔴 脏但未定位到窗口内重复行（可能是别类问题），"
-                f"未做改动。红旗: {[f['check'] for f in before['red_flags']]}")
+        flags = [f["check"] for f in before["red_flags"]]
+        return CleanResult(name, f"🔴 脏但未定位到窗口内重复行（可能是别类问题），"
+                                 f"未做改动。红旗: {flags}")
 
-    kept = [r for i, r in enumerate(rows) if i not in drop]
+    kept = [row for index, row in enumerate(rows) if index not in drop]
 
-    # 清完自检：重放净持仓必须等于 state
-    replay_qty = _replay(kept)
-    state_qty = {c: ig._i(p.get("qty")) for c, p in state.get("positions", {}).items()
-                 if ig._i(p.get("qty")) != 0}
-    after = ig.check(kept, state, init_cash=state.get("init_cash", 1_000_000.0))
+    # ---- 清完自检：重放净持仓必须等于 state，且闸门必须判 clean ----
+    after = integrity.check(kept, state, init_cash=init_cash)
+    replayed, declared = replay_positions(kept), _state_positions(state)
+    if replayed != declared or not after["clean"]:
+        return CleanResult(name, (
+            f"🔴 清洗后仍不一致，已回滚不写盘。\n"
+            f"       重放持仓={replayed} vs state={declared}\n"
+            f"       残留红旗={[f['check'] for f in after['red_flags']]}"))
 
-    if replay_qty != state_qty or not after["clean"]:
-        return (f"  {name}: 🔴 清洗后仍不一致，已回滚不写盘。\n"
-                f"       重放持仓={replay_qty} vs state={state_qty}\n"
-                f"       残留红旗={[f['check'] for f in after['red_flags']]}")
-
-    msg = (f"  {name}: 定位幽灵行 {sorted(drop)}（删 {len(drop)} 行，保留 {len(kept)} 行）"
-           f" → 清洗后 ✅ clean，账实一致")
+    message = (f"定位幽灵行 {sorted(drop)}（删 {len(drop)} 行，"
+               f"保留 {len(kept)} 行）→ 清洗后 ✅ clean，账实一致")
     if dry_run:
-        return msg + "  [dry-run 未写盘]"
+        return CleanResult(name, message + "  [dry-run 未写盘]", dropped=sorted(drop))
 
-    # 备份 + 写回
-    ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    bak = f"{tpath}.bak.{ts}"
-    shutil.copy2(tpath, bak)
-    with open(tpath, "w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(header)
-        for r in kept:
-            w.writerow([r.get(h, "") for h in header])
-    return msg + f"\n       已写回，原文件备份 -> {os.path.basename(bak)}"
+    backup = _rewrite_trades(account_paths.trades, kept)
+    return CleanResult(name, message + f"\n       已写回，原文件备份 -> {backup.name}",
+                       changed=True, dropped=sorted(drop), backup=backup)
 
 
-def main():
-    dry = "--dry-run" in sys.argv
-    print("== 幽灵成交清洗" + ("（预演）" if dry else "") + " ==")
-    for name, sp, tp in _accounts():
-        print(clean_account(name, sp, tp, dry_run=dry))
-    print("\n== 清洗后复检 ==")
-    os.system(f'python3 "{os.path.join(BASE, "integrity_gate.py")}"')
+def _rewrite_trades(path: Path, rows: list[dict]) -> Path:
+    """备份后整体重写 trades.csv。备份**必须先落盘**，否则无从回滚。"""
+    from astock.core.ledger import TRADE_COLUMNS
+
+    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup = path.with_suffix(path.suffix + f".bak.{stamp}")
+    backup.write_bytes(path.read_bytes())
+
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(TRADE_COLUMNS)
+        for row in rows:
+            writer.writerow([row.get(column, "") for column in TRADE_COLUMNS])
+    return backup
 
 
-if __name__ == "__main__":
-    main()
+def clean_all(*, dry_run: bool = False, printer=print) -> list[CleanResult]:
+    """遍历全部 13 个账户。账户名单来自 `paths.all_accounts()`，不再手写。"""
+    printer("== 幽灵成交清洗" + ("（预演）" if dry_run else "") + " ==")
+    results = [clean_account(ap, dry_run=dry_run) for ap in paths.all_accounts()]
+    for result in results:
+        printer(str(result))
+
+    printer("\n== 清洗后复检 ==")
+    for account_paths in paths.all_accounts():
+        state = files.read_json(account_paths.state)
+        if state is None:
+            continue
+        rows = files.read_csv_rows(account_paths.trades)
+        gate = integrity.check(rows, state, init_cash=state.get("init_cash", 1_000_000.0))
+        mark = "✅ clean" if gate["clean"] else f"🔴 {len(gate['red_flags'])} 红旗"
+        printer(f"  {account_paths.account}: {mark}")
+    return results

@@ -127,6 +127,19 @@ def cmd_stall_check(args) -> int:
     return 0        # 报告即目的，不因发现停摆而让调度脚本整体失败
 
 
+def cmd_clean_ghosts(args) -> int:
+    """清洗历史遗留的并发幽灵成交。默认预演，加 --apply 才写盘。"""
+    from astock.ops import clean_ghost_trades
+
+    results = clean_ghost_trades.clean_all(dry_run=not args.apply)
+    changed = [r.account for r in results if r.changed]
+    if not args.apply:
+        print("\n预演模式，未写盘。确认无误后加 --apply 执行。")
+    elif changed:
+        print(f"\n已清洗 {len(changed)} 个账户：{', '.join(changed)}（原文件均已备份）")
+    return 0
+
+
 def cmd_doctor(args) -> int:
     """环境体检：时钟、工作区、配置、13 个账户的账本是否就位。"""
     from astock.runtime import paths
@@ -187,6 +200,11 @@ def build_parser() -> argparse.ArgumentParser:
     weekly.add_argument("--week", default=None, help="指定 ISO 周，如 2026-W34；省略取本周")
     weekly.add_argument("--offline", action="store_true", help="不拉实时指数")
     weekly.set_defaults(func=cmd_weekly)
+
+    clean = sub.add_parser("clean-ghosts", help="清洗历史遗留的并发幽灵成交")
+    # 默认预演：这个命令会重写 trades.csv，改账本必须是显式动作
+    clean.add_argument("--apply", action="store_true", help="真正写盘（默认只预演）")
+    clean.set_defaults(func=cmd_clean_ghosts)
 
     stall = sub.add_parser("stall-check", help="引擎停摆自检（每轮收尾跑）")
     stall.set_defaults(func=cmd_stall_check)
