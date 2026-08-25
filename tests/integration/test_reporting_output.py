@@ -4,13 +4,12 @@
 不会在真实数据上炸掉，也不会悄悄产出一份残缺的东西。
 """
 import json
-import pathlib
 
 import pytest
 
 from astock.cli.main import main as cli_main
 from astock.core.account import Account
-from astock.reporting import dashboard, report, weekly
+from astock.reporting import report, weekly
 from astock.runtime import paths
 
 WEEK = "2026-W34"
@@ -70,35 +69,9 @@ class TestWeeklyOutput:
         assert weekly._prev_week_rounds("1999-W01") == {}
 
 
-class TestDashboardOutput:
-
-    def test_renders_a_complete_html_document(self, one_account):
-        data, status = dashboard.collect(use_live=False)
-        out = dashboard.render(data, live_status=status, use_live=False)
-        html = pathlib.Path(out).read_text(encoding="utf-8")
-        assert html.lstrip().startswith("<!DOCTYPE html>")
-        assert html.rstrip().endswith("</html>")
-
-    def test_html_lands_in_the_reports_directory(self, one_account):
-        data, status = dashboard.collect(use_live=False)
-        out = dashboard.render(data, live_status=status, use_live=False)
-        assert str(paths.reports_dir()) in out
-
-    def test_every_account_appears_in_the_page(self, one_account):
-        data, status = dashboard.collect(use_live=False)
-        html = pathlib.Path(
-            dashboard.render(data, live_status=status, use_live=False)
-        ).read_text(encoding="utf-8")
-        for group in data:
-            assert group["name"] in html, f"{group['name']} 没出现在看板里"
-
-    def test_payload_is_embedded_as_parseable_json(self, one_account):
-        """看板把数据内嵌进页面。序列化失败会渲染出一个空图表而不报错。"""
-        data, status = dashboard.collect(use_live=False)
-        html = pathlib.Path(
-            dashboard.render(data, live_status=status, use_live=False)
-        ).read_text(encoding="utf-8")
-        assert json.dumps(data, ensure_ascii=False)[:40] in html or '"exp1' in html
+# 看板渲染已移交 `console`（观察台），相应测试见 tests/integration/test_console.py：
+# 那边覆盖得更全——自包含性、占位符全部填充、负载可解析、
+# 以及 agent 自由文本里的 `</script>` 必须被转义。
 
 
 class TestAccountReport:

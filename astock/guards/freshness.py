@@ -138,3 +138,42 @@ def check(state, equity_rows, now=None, review_start=None, review_end=None):
             ))
 
     return {"fresh": not flags, "red_flags": flags}
+
+
+# ---------------------------------------------------------------------------
+# 账户级停摆判定
+# ---------------------------------------------------------------------------
+
+#: 回看窗口。停摆是以「周」计的故障，看太短会被单日休市干扰。
+STALL_REVIEW_DAYS = 7
+
+
+def find_stalled(now=None, review_days: int = STALL_REVIEW_DAYS) -> list:
+    """遍历全部账户，返回判定为停摆的账户名。账本不存在的直接跳过（尚未开张）。
+
+    ⚠ 这个函数原本住在 `ops/stall_check.py`。但「引擎有没有停摆」是一条**闸门判定**，
+    而不是一个运维脚本——`reporting.console` 也要用它来给看板标红。
+    留在 ops 层会让 reporting 反向依赖上层（分层测试当场报红）。
+    ops 那边现在只剩打印外壳。
+    """
+    import datetime as dt
+
+    from astock.core.account import Account
+    from astock.runtime import paths
+
+    now = now or dt.datetime.now()
+    stalled = []
+    for account_paths in paths.all_accounts():
+        if not account_paths.state.exists():
+            continue
+        account = Account.open(account_paths.account)
+        result = check(
+            account.state,
+            [{"时间": now.strftime("%Y-%m-%d %H:%M:%S")}],
+            now=now,
+            review_start=now - dt.timedelta(days=review_days),
+            review_end=now,
+        )
+        if any(flag["check"] == "stalled_engine" for flag in result["red_flags"]):
+            stalled.append(account_paths.account)
+    return stalled

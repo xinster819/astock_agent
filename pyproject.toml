@@ -36,6 +36,11 @@ astock = "astock.cli.main:main"
 [tool.setuptools.packages.find]
 include = ["astock*"]
 
+[tool.setuptools.package-data]
+# 观察台的前端资源是真实文件，不是嵌在 .py 里的模板字符串——
+# 所以必须显式声明为包数据，否则 `pip install` 之后 console.render() 找不到它们。
+"astock.reporting" = ["webapp/*.html", "webapp/*.css", "webapp/*.js"]
+
 # ---------------------------------------------------------------------------
 # pytest
 # ---------------------------------------------------------------------------

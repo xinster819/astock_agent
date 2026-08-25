@@ -106,12 +106,20 @@ def cmd_check(args) -> int:
 
 
 def cmd_dashboard(args) -> int:
-    from astock.reporting import dashboard
+    """生成对照实验观察台（单文件 HTML，双击即开，不起任何服务）。"""
+    from astock.reporting import console
 
-    use_live = not args.offline
-    data, live_status = dashboard.collect(use_live=use_live)
-    path = dashboard.render(data, live_status=live_status, use_live=use_live)
-    print(f"看板已生成: {path}")
+    payload = console.build(use_live=not args.offline)
+    path = console.render(payload)
+
+    verdict = payload["verdict"]
+    print(f"观察台已生成: {path}")
+    print(f"  {verdict['headline']}")
+    for reason in verdict["reasons"]:
+        print(f"    — {reason}")
+    health = payload["health"]
+    if not health["all_clear"]:
+        print(f"  🔴 {health['note']}")
     return 0
 
 
@@ -204,7 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
     check = sub.add_parser("check", help="账本完整性体检")
     check.set_defaults(func=cmd_check)
 
-    dashboard = sub.add_parser("dashboard", help="生成 HTML 看板")
+    dashboard = sub.add_parser("dashboard", help="生成对照实验观察台（单文件 HTML）")
     dashboard.add_argument("--offline", action="store_true", help="不拉实时行情")
     dashboard.set_defaults(func=cmd_dashboard)
 

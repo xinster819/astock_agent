@@ -16,34 +16,14 @@
 """
 from __future__ import annotations
 
-import datetime as dt
-
-from astock.core.account import Account
 from astock.guards import freshness
-from astock.runtime import clock, paths
+from astock.runtime import clock
 
-#: 回看窗口。停摆是以"周"计的故障，看太短会被单日休市干扰。
-REVIEW_DAYS = 7
+#: 判定本身在 `guards.freshness`——「引擎有没有停摆」是闸门判定，不是运维脚本。
+#: 本模块只剩打印外壳。
+REVIEW_DAYS = freshness.STALL_REVIEW_DAYS
 
-
-def find_stalled(now: dt.datetime | None = None) -> list[str]:
-    """返回判定为停摆的账户名列表。账本不存在的账户直接跳过（尚未开张）。"""
-    now = now or dt.datetime.now()
-    stalled = []
-    for account_paths in paths.all_accounts():
-        if not account_paths.state.exists():
-            continue
-        account = Account.open(account_paths.account)
-        result = freshness.check(
-            account.state,
-            [{"时间": now.strftime("%Y-%m-%d %H:%M:%S")}],
-            now=now,
-            review_start=now - dt.timedelta(days=REVIEW_DAYS),
-            review_end=now,
-        )
-        if any(flag["check"] == "stalled_engine" for flag in result["red_flags"]):
-            stalled.append(account_paths.account)
-    return stalled
+find_stalled = freshness.find_stalled
 
 
 def report(printer=print) -> int:

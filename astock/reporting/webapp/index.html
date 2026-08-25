@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>对照实验观察台 · astock</title>
+<style>__CSS__</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <div>
+      <h1>对照实验观察台</h1>
+      <p class="sub">13 个隔离账户 · 规则决策 vs Agent 决策</p>
+    </div>
+  </div>
+  <div class="stamp">
+    <span id="generated"></span>
+    <span id="livestatus"></span>
+    <button id="theme" type="button" title="切换明暗">◐</button>
+  </div>
+</header>
+
+<!-- 判据：整个看板最重要的一行。排名之前先回答「能不能比」 -->
+<section id="verdict" class="verdict" aria-live="polite">
+  <div class="verdict-head">
+    <span class="verdict-icon" id="verdict-icon"></span>
+    <h2 id="verdict-headline"></h2>
+  </div>
+  <ul id="verdict-reasons" class="verdict-reasons"></ul>
+  <p class="verdict-foot" id="verdict-foot"></p>
+</section>
+
+<!-- 闸门：脏账本算出来的收益率，看起来和干净的一模一样 -->
+<section class="health" id="health"></section>
+
+<main class="grid">
+
+  <!-- 左：排行榜 -->
+  <section class="panel leaderboard">
+    <div class="panel-head">
+      <h2>账户</h2>
+      <div class="controls">
+        <div class="segmented" role="group" aria-label="按层筛选">
+          <button data-layer="all" class="on">全部</button>
+          <button data-layer="control">对照</button>
+          <button data-layer="rule">规则</button>
+          <button data-layer="agent">Agent</button>
+        </div>
+      </div>
+    </div>
+    <div class="tablewrap">
+      <table id="board">
+        <thead>
+          <tr>
+            <th class="c-pick"><span class="sr">选中</span></th>
+            <th class="c-name" data-sort="name">账户</th>
+            <th class="num" data-sort="ret">累计收益</th>
+            <th class="num" data-sort="dd">最大回撤</th>
+            <th class="num" data-sort="win">胜率</th>
+            <th class="num" data-sort="closed">平仓</th>
+            <th class="c-tier" data-sort="tier">样本</th>
+            <th class="num" data-sort="round">轮次</th>
+          </tr>
+        </thead>
+        <tbody id="board-body"></tbody>
+      </table>
+    </div>
+    <p class="foot" id="board-foot"></p>
+  </section>
+
+  <!-- 右：权益曲线 -->
+  <section class="panel chart">
+    <div class="panel-head">
+      <h2>权益曲线</h2>
+      <div class="controls">
+        <div class="segmented" role="group" aria-label="曲线口径">
+          <button data-mode="ret" class="on">累计收益%</button>
+          <button data-mode="norm">归一化</button>
+          <button data-mode="dd">回撤</button>
+        </div>
+      </div>
+    </div>
+    <div class="chartbox">
+      <svg id="curve" role="img" aria-label="各账户权益曲线"></svg>
+      <div id="tooltip" class="tooltip" hidden></div>
+    </div>
+    <div id="legend" class="legend"></div>
+  </section>
+
+</main>
+
+<!-- 归因：选中账户的细节 -->
+<section class="panel detail" id="detail">
+  <div class="panel-head">
+    <h2 id="detail-title">归因</h2>
+    <span class="hint" id="detail-hint">点左侧任意账户查看</span>
+  </div>
+  <div id="detail-body"></div>
+</section>
+
+<!-- 独立性：13 个账户如果大量持有同一批票，对照实验的信息量远低于账户数暗示的 -->
+<section class="panel overlap" id="overlap-panel">
+  <div class="panel-head">
+    <h2>持仓重叠</h2>
+    <span class="hint">同一只票被多个账户持有时，它们的收益会同涨同跌</span>
+  </div>
+  <div id="overlap-body"></div>
+</section>
+
+<footer class="pagefoot">
+  <span id="workspace"></span>
+  <span>只读观察台 · 不下单、不改账本、不起监听进程</span>
+</footer>
+
+<script id="payload" type="application/json">__PAYLOAD__</script>
+<script>__JS__</script>
+</body>
+</html>
