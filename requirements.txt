@@ -1,4 +1,9 @@
 # A股多策略模拟交易系统 —— 运行依赖
+#
+# ⚠ 这份清单必须与 pyproject.toml 的 [project].dependencies 保持一致。
+#   保留它是为了不装包也能直接 pip install -r 起一套运行环境（调度机上的用法）；
+#   开发环境请用 `make install`（等价于 pip install -e ".[dev]"），
+#   会一并装上 pytest / ruff / mypy。
 # 标准库以外仅需以下两个第三方包。
 # 安装：pip install -r requirements.txt
 #

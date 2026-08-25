@@ -1,0 +1,114 @@
+# ============================================================================
+# astock_agent · 项目元数据与工具链配置
+# ============================================================================
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astock-agent"
+version = "2.0.0"
+description = "A 股多策略模拟交易系统：13 个隔离账户的对照实验平台"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Proprietary" }
+
+# 运行期依赖。标准库以外仅需行情取数链路。
+dependencies = [
+    "akshare>=1.12.0",
+    "pandas>=1.5.0",
+    "numpy>=1.23.0",
+]
+
+[project.optional-dependencies]
+# 开发/CI 依赖。运行生产调度不需要装。
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+    "mypy>=1.8",
+]
+
+[project.scripts]
+# 统一 CLI 入口，取代散落的 run.py / run_exp.py / prepare.py …
+astock = "astock.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["astock*"]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+# 关键：--strict-markers + -ra 让"测试没被收集"这种静默失效暴露出来。
+# 本项目的核心教训就是"静默失效比报错危险"，测试基础设施同样适用。
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--import-mode=importlib",
+]
+markers = [
+    "network: 需要真实外网行情源，默认跳过（-m network 显式开启）",
+    "slow: 单例耗时 >1s",
+]
+filterwarnings = ["error::DeprecationWarning:astock.*"]
+
+# ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["astock"]
+omit = ["*/cli/*", "*/__main__.py"]
+
+[tool.coverage.report]
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle / pyflakes
+    "I",             # import 排序
+    "B",             # bugbear：可变默认参数、循环变量捕获等真 bug 类
+    "UP",            # pyupgrade
+    "SIM",           # 冗余分支/条件
+    "RUF",
+]
+ignore = [
+    "E501",    # 行长交给 formatter
+    "RUF001", "RUF002", "RUF003",  # 中文注释里的全角标点不是错误
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+# ---------------------------------------------------------------------------
+# mypy —— 渐进式：先钉住核心域（钱和账本），其余暂不强制
+# ---------------------------------------------------------------------------
+[tool.mypy]
+# 分析目标版本。运行期支持到 3.9（见 requires-python），但 mypy 自身已不接受
+# python_version < 3.10；3.10 的类型语义是 3.9 的超集，用它分析不会漏报 3.9 的问题。
+python_version = "3.10"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["astock.core.*", "astock.runtime.*"]
+disallow_untyped_defs = true
+strict_equality = true

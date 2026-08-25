@@ -21,6 +21,12 @@ ENV/
 *.pfx
 ca-bundle*
 
+# ---- 打包 / 工具缓存 ----
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
 # ---- Python 运行期产物 ----
 __pycache__/
 *.py[cod]
@@ -38,8 +44,12 @@ logs/
 scheduler_audit.jsonl
 
 # ---- 大体积可重生成的审计日志 ----
-# 纯行情价差记录，重跑会自动重新累积（README_MIGRATION 第 6 节已说明不随迁移打包）
+# 纯行情价差记录，重跑会自动重新累积（docs/README_MIGRATION.md 第 6 节已说明不随迁移打包）
 spread_log.csv
+
+# ---- 报表产物：全部可重新生成 ----
+# 账本丢了不可恢复，报表丢了重跑一次就有——所以两者分开存放、分别对待。
+reports/
 
 # ---- 改动前的自动备份，不入库 ----
 *.bak
@@ -85,18 +95,31 @@ market_regime_cache.json
 jitter_log.csv
 
 # ---- 📄 交接/复盘文档：按项目决定不同步 ----
-# 这些文档内嵌了 13 个账户的收益率表、持仓明细与成交举例，
+# docs/ 下的文档内嵌了 13 个账户的收益率表、持仓明细与成交举例，
 # 与账本属于同一份信息；且含交接期的内部上下文。
-# 仓库对外只保留新写的 README.md（无任何账本数字）。
+# 仓库对外只保留 README.md（无任何账本数字）。
 *.md
 !README.md
 
 # ============================================================================
 # 【有意保留在版本库里的】——代码、配置与文档：
-#   *.py                     全部引擎/策略/闸门/测试代码
-#   experiments/exp*.json    各实验组策略参数
-#   sample_pool.json         价差采样池（沪深300 代码表，公开信息）
-#   requirements.txt         依赖
+#   astock/**/*.py                全部引擎/策略/闸门代码
+#   tests/**/*.py                 测试
+#   config/experiments/exp*.json  各实验组策略参数
+#   config/sample_pool.json       价差采样池（沪深300 代码表，公开信息）
+#   pyproject.toml                项目元数据与 pytest/ruff/mypy 配置
+#   requirements.txt              依赖（与 pyproject 的 dependencies 保持一致）
+#   Makefile                      本地开发常用命令
+#   .github/workflows/ci.yml      CI
 #   scheduler_tick.sh / install_scheduler.sh / com.astock.agent.plist   调度
-#   README.md                新写的对外说明（无账本数字）
+#   README.md                     对外说明（无账本数字）
+#
+# 【目录约定】
+#   config/     入库的配置                    ← 改了要评审
+#   astock/     代码
+#   tests/      测试
+#   docs/       内部文档（不入库，含账本数字）
+#   reports/    报表产物（不入库，可重新生成）
+#   experiments/ groupB/ groupC/ groupD/ 及根目录的 state/trades/equity
+#               = 账本（不入库，丢了不可恢复）
 # ============================================================================

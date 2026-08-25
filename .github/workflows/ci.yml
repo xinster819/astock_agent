@@ -1,0 +1,83 @@
+# CI · 重构前这个仓库没有任何自动化检查。
+# 后果不是抽象的：test_freshness_gate.py 和 test_exp_scheduler.py 是 pytest 风格，
+# 而仓库没装 pytest，靠 `python test_x.py` 跑时**静默什么都不执行**——
+# 两个文件的测试从写下那天起就没跑过一次，没人发现。
+#
+# 所以这里的第一条 job 不是"跑测试"，而是"确认测试真的跑了"。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 是 pyproject 声明的下限，3.11 是生产运行的版本。
+        # 下限必须真的测——声明支持而不验证，等于没声明。
+        python-version: ["3.9", "3.11"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: 安装
+        run: |
+          python -m pip install --upgrade pip
+          # 只装 dev 依赖：核心层与闸门层不碰网络，跑测试用不着 akshare/pandas。
+          # 需要它们的用例自带 importorskip。
+          python -m pip install -e ".[dev]" || python -m pip install pytest pytest-cov ruff
+
+      - name: 静态检查
+        run: ruff check astock tests
+
+      - name: 类型检查
+        # core / runtime 为严格模式（disallow_untyped_defs）——
+        # 钱和账本这两层不允许有未标注的函数溜进来。
+        if: matrix.python-version == '3.11'
+        run: mypy astock
+
+      - name: 测试
+        # 交易所时区。进程 TZ 不对会让账本日期整体错位——
+        # 2026-07-31 的三周停摆就是这么来的，CI 里也必须钉住。
+        env:
+          TZ: Asia/Shanghai
+        run: pytest -q --cov=astock --cov-report=term-missing
+
+      - name: 核心层覆盖率闸门
+        # 只对 core/runtime 设硬门槛：那是钱和账本，不允许覆盖率滑坡。
+        # 其余层（取数、报表）大量依赖外网，不设门槛以免逼出假测试。
+        env:
+          TZ: Asia/Shanghai
+        run: pytest -q --cov=astock.core --cov=astock.runtime --cov-fail-under=90
+
+  guard-against-silent-skips:
+    # 静默失效是这个项目的头号敌人，测试基础设施同样适用：
+    # 一个从不失败也从不执行的测试，比没有测试更危险——它让覆盖率报告显得很好看。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install pytest
+      - name: 确认没有测试被静默跳过
+        env:
+          TZ: Asia/Shanghai
+        run: |
+          python -m pip install -e . 2>/dev/null || true
+          output=$(pytest -q -rs 2>&1)
+          echo "$output"
+          if echo "$output" | grep -qi "skipped"; then
+            echo "::error::有测试被跳过。跳过必须是显式且有理由的，"
+            echo "::error::请改用构造数据，或在此工作流里显式豁免。"
+            exit 1
+          fi
