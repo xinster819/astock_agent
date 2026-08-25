@@ -109,7 +109,16 @@ def cmd_dashboard(args) -> int:
     """生成对照实验观察台（单文件 HTML，双击即开，不起任何服务）。"""
     from astock.reporting import console
 
-    payload = console.build(use_live=not args.offline)
+    # 带实时行情时要跑几分钟（13 个账户的持仓逐只三源交叉验证 + 基准指数），
+    # 静默几分钟会让人以为挂了。
+    step = 0
+
+    def progress(message: str) -> None:
+        nonlocal step
+        step += 1
+        print(f"  [{step}/5] {message}", flush=True)
+
+    payload = console.build(use_live=not args.offline, progress=progress)
     path = console.render(payload)
 
     verdict = payload["verdict"]

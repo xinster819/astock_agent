@@ -169,6 +169,74 @@ class TestRenderedPage:
         assert console.render(payload).parent == paths.reports_dir()
 
 
+class TestBenchmarkAlignment:
+    """基准必须对齐到账户的观察期，否则这个对比没有意义。
+
+    负载里带的是 180 天指数历史，而账户只跑了约两个月。拿「账户自 7 月 +1%」
+    比「指数自 3 月 +5%」是错的——实测对齐后同期沪深300 是 −8.58%，
+    而多数账户在 −1%~0%，这层背景光看账户收益率完全读不出来。
+    """
+
+    def _benchmark(self, closes):
+        return {"name": "沪深300", "code": "000300", "points": [
+            {"t": f"2026-{m:02d}-{d:02d}", "close": c}
+            for (m, d), c in closes.items()]}
+
+    def _accounts(self, first, last):
+        return [{"account": "exp1", "exists": True,
+                 "equity": [{"t": f"{first} 10:00:00", "total": 1.0},
+                            {"t": f"{last} 15:00:00", "total": 1.0}]}]
+
+    def test_return_is_measured_inside_the_account_window(self):
+        bench = self._benchmark({(3, 1): 100.0, (7, 1): 200.0, (8, 1): 220.0})
+        accounts = self._accounts("2026-07-01", "2026-08-01")
+        console._align_benchmark(bench, accounts)
+        # 只看 7/1 → 8/1，不该把 3 月起的翻倍算进来
+        assert bench["window_return_pct"] == 10.0
+        assert bench["window"] == ["2026-07-01", "2026-08-01"]
+        assert bench["window_points"] == 2
+
+    def test_points_outside_the_window_are_excluded(self):
+        bench = self._benchmark({(3, 1): 100.0, (7, 1): 100.0, (8, 1): 90.0, (12, 1): 500.0})
+        console._align_benchmark(bench, self._accounts("2026-07-01", "2026-08-01"))
+        assert bench["window_points"] == 2
+        assert bench["window_return_pct"] == -10.0
+
+    def test_too_few_points_leaves_it_unannotated(self):
+        """窗口里不足两个点就不给结论，而不是编一个。"""
+        bench = self._benchmark({(3, 1): 100.0})
+        console._align_benchmark(bench, self._accounts("2026-07-01", "2026-08-01"))
+        assert "window_return_pct" not in bench
+
+    def test_missing_benchmark_is_a_noop(self):
+        console._align_benchmark(None, self._accounts("2026-07-01", "2026-08-01"))
+
+    def test_accounts_without_equity_leave_it_unannotated(self):
+        bench = self._benchmark({(7, 1): 100.0, (8, 1): 110.0})
+        console._align_benchmark(bench, [{"account": "A", "exists": False}])
+        assert "window_return_pct" not in bench
+
+
+class TestProgress:
+    """带实时行情时这条命令要跑好几分钟（14 只持仓逐只做三源交叉验证，
+    实测单只约 10 秒）。全程没有输出的话，人会以为它挂了——实测确实会。"""
+
+    def test_reports_each_stage(self, seeded):
+        stages = []
+        console.build(use_live=False, progress=stages.append)
+        assert len(stages) >= 4
+        assert any("账本" in s for s in stages)
+        assert any("完成" in s for s in stages)
+
+    def test_progress_is_optional(self, seeded):
+        console.build(use_live=False)   # 不给回调也要能跑
+
+    def test_offline_mode_says_it_is_skipping_the_network(self, seeded):
+        stages = []
+        console.build(use_live=False, progress=stages.append)
+        assert any("离线" in s for s in stages)
+
+
 class TestCliCommand:
 
     def test_dashboard_command_succeeds_and_reports_the_verdict(self, seeded, capsys):
@@ -178,3 +246,4 @@ class TestCliCommand:
         out = capsys.readouterr().out
         assert "观察台已生成" in out
         assert "还不能下结论" in out, "命令行也要把判据说出来，不能只给个文件路径"
+        assert "[1/5]" in out, "长耗时命令必须给进度，否则看起来像挂了"

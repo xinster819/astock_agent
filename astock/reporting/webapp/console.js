@@ -41,7 +41,25 @@ const money = (v) =>
 /** 涨跌方向的语义类名。A 股惯例：红涨绿跌。 */
 const dirClass = (v) => (v == null ? 'na' : v > 0 ? 'up' : v < 0 ? 'down' : '');
 
-const parseTime = (s) => new Date(String(s).replace(' ', 'T')).getTime();
+/**
+ * 解析账本/指数里的时间串。
+ *
+ * ⚠ 必须显式补上时间部分。JS 的 Date 对**纯日期串**（"2026-06-29"）按 UTC 解析，
+ * 对带时间的串（"2026-06-29 10:00:00"）按本地时区解析——同一份数据里两种格式
+ * 并存时（权益点带时刻、指数日线只有日期），两者会整体差一个时区偏移。
+ * 实测后果：观察期第一天的指数收盘被挤出窗口，基准起点晚一天，
+ * 且所有基准点在 x 轴上偏移约 7 小时。
+ */
+const parseTime = (s) => {
+  const text = String(s).trim().replace(' ', 'T');
+  return new Date(text.includes('T') ? text : `${text}T00:00:00`).getTime();
+};
+
+const startOfDay = (ms) => {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+};
 
 const live = () => DATA.accounts.filter((a) => a.exists);
 
@@ -91,6 +109,18 @@ function renderHealth() {
   if (h.never_closed.length) {
     chips.push(chip(true, '从未平仓', String(h.never_closed.length),
       `${h.never_closed.join(' ')} — 其收益全是浮盈，不构成业绩`));
+  }
+
+  // 基准背景。多数人看到「-0.79%」不会想到同期指数跌了 8.58%——
+  // 而那正是判断这一组到底做得好不好的前提。
+  const b = DATA.benchmark;
+  if (b && b.window_return_pct != null) {
+    const c = el('div', 'chip');
+    c.append(el('span', 'dot'));
+    c.append(el('b', null, `同期${b.name}`));
+    const v = el('span', `n ${dirClass(b.window_return_pct)}`, pct(b.window_return_pct));
+    c.append(v, el('span', null, `${b.window[0]} 起`));
+    chips.push(c);
   }
 
   const r = DATA.meta.regime;
@@ -246,15 +276,32 @@ function seriesFor(account) {
   });
 }
 
-/** 基准指数换算成同口径的百分比曲线。回撤模式下不画基准。 */
-function benchSeries() {
+/**
+ * 基准指数换算成同口径的百分比曲线。回撤模式下不画基准。
+ *
+ * ⚠ 必须**裁剪到账户的观察窗口，并从窗口起点归一化**。
+ * 负载里带的是 180 天指数历史，而账户只跑了约 2 个月。直接画会有两个后果：
+ *   1. x 轴被指数的长历史撑开，账户曲线被挤到右半边；
+ *   2. 更要命的是，指数从实验开始之前就在累计收益——拿「账户自 7 月 +1%」
+ *      去比「指数自 3 月 +5%」，这个对比本身没有意义。
+ * 裁剪之后，两条线才是「同一段时间里各自涨了多少」。
+ */
+function benchSeries(window) {
   const b = DATA.benchmark;
   if (!b || !b.points || !b.points.length || state.mode === 'dd') return null;
-  const base = b.points[0].close;
+  if (!window) return null;
+
+  const inWindow = b.points
+    .map((p) => ({ x: parseTime(p.t), close: p.close }))
+    .filter((p) => p.x >= window.min && p.x <= window.max);
+  if (inWindow.length < 2) return null;
+
+  const base = inWindow[0].close;
   if (!base) return null;
   return {
     name: b.name,
-    points: b.points.map((p) => ({ x: parseTime(p.t), y: (p.close / base - 1) * 100 })),
+    clipped: inWindow.length < b.points.length,
+    points: inWindow.map((p) => ({ x: p.x, y: (p.close / base - 1) * 100 })),
   };
 }
 
@@ -273,7 +320,15 @@ function renderChart() {
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
 
   const series = chartables();
-  const bench = benchSeries();
+  // 先由账户曲线定出时间窗，基准再裁进这个窗口——顺序不能反
+  const accountXs = series.flatMap((s) => s.points).map((p) => p.x);
+  // 下沿放宽到当天 00:00：指数日线的时间戳是当日零点，而权益点是盘中时刻，
+  // 直接按时间戳裁会把观察期第一天的指数收盘挤掉，基准起点晚一天。
+  // 与 Python 侧 `_align_benchmark` 的按日期裁剪保持一致。
+  const window = accountXs.length
+    ? { min: startOfDay(Math.min(...accountXs)), max: Math.max(...accountXs) }
+    : null;
+  const bench = benchSeries(window);
   svg.replaceChildren();
 
   if (!series.length) {
@@ -384,10 +439,13 @@ function renderLegend(series, bench) {
     const item = el('div', 'item');
     const bar = el('span', 'bar');
     bar.style.background = 'var(--faint)';
-    item.append(bar, el('span', null, `${bench.name}（基准）`));
+    item.append(bar, el('span', null,
+      `${bench.name}（基准${bench.clipped ? '，已对齐观察期' : ''}）`));
     items.push(item);
   } else if (DATA.benchmark && DATA.benchmark.error) {
-    items.push(el('div', 'item', '基准未取到（离线或取数失败）'));
+    items.push(el('div', 'item', '基准未取到（取数失败）'));
+  } else if (!DATA.benchmark && state.mode !== 'dd') {
+    items.push(el('div', 'item', '基准未取到（离线模式）'));
   }
   box.replaceChildren(...items);
 }

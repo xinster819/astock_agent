@@ -31,14 +31,33 @@ from astock.runtime import clock, paths
 BENCHMARK = ("沪深300", "000300")
 
 
-def build(use_live: bool = True) -> dict[str, Any]:
-    """装配观察台的完整数据负载。"""
+def build(use_live: bool = True, progress=None) -> dict[str, Any]:
+    """装配观察台的完整数据负载。
+
+    `progress` 是可选的进度回调。带实时行情时这个函数要跑好几分钟——
+    13 个账户的持仓逐只做三源交叉验证，再加基准指数与市场状态。
+    全程没有任何输出的话，人会以为它挂了（实测确实会）。
+    """
+    say = progress or (lambda _msg: None)
+
+    say("读取 13 个账户账本…")
     raw, live_status = dashboard.collect(use_live=use_live)
+
+    say("统计绩效与样本充分度…")
     accounts = [_enrich(account) for account in raw]
 
+    say("跑闸门体检（账本对账 + 引擎停摆）…")
     verdict = analytics.comparability(accounts)
+    health = _health(accounts)
+
+    say("取市场状态与基准指数…" if use_live else "离线模式，跳过行情与基准…")
+    meta = _meta(live_status, use_live)
+    benchmark = _benchmark(use_live)
+    _align_benchmark(benchmark, accounts)
+
+    say("装配完成。")
     return {
-        "meta": _meta(live_status, use_live),
+        "meta": meta,
         "verdict": {
             "ok": verdict.ok,
             "headline": verdict.headline,
@@ -50,10 +69,10 @@ def build(use_live: bool = True) -> dict[str, Any]:
             "min_trades_for_signal": analytics.MIN_TRADES_FOR_SIGNAL,
             "min_trades_for_comparison": analytics.MIN_TRADES_FOR_COMPARISON,
         },
-        "health": _health(accounts),
+        "health": health,
         "accounts": accounts,
         "overlap": analytics.holding_overlap(accounts),
-        "benchmark": _benchmark(use_live),
+        "benchmark": benchmark,
     }
 
 
@@ -182,6 +201,41 @@ def _meta(live_status: str, use_live: bool) -> dict[str, Any]:
             "degraded": bool(result.degraded), "detail": result.detail,
         },
     }
+
+
+def _align_benchmark(benchmark: dict[str, Any] | None,
+                     accounts: list[dict[str, Any]]) -> None:
+    """算出基准在**账户观察期内**的涨跌，就地写进 benchmark。
+
+    为什么必须对齐窗口：负载里带的是 180 天指数历史，而账户只跑了约两个月。
+    直接报「指数 180 天涨跌」去跟「账户两个月收益」比，这个对比本身没有意义。
+
+    对齐之后才看得出真正要紧的一层背景——实测同期沪深300 跌了 8.58%，
+    而多数账户只在 −1%~0%。光看账户自己的收益率，完全读不出这件事。
+    """
+    from astock.reporting.metrics import parse_time
+
+    if not benchmark or not benchmark.get("points"):
+        return
+
+    times = [t for account in accounts if account.get("exists")
+             for t in (parse_time(p.get("t", "")) for p in account.get("equity", [])) if t]
+    if len(times) < 2:
+        return
+    # ⚠ 按【日期】而非时间戳裁剪。指数日线的时间戳是当日 00:00，而权益点是
+    # 盘中时刻（如 10:00）。用时间戳比较会把观察期第一天的指数收盘挤出窗口，
+    # 基准起点因此系统性地晚一天。
+    low, high = min(times).date(), max(times).date()
+
+    inside = [p for p in benchmark["points"]
+              if (at := parse_time(p["t"])) and low <= at.date() <= high]
+    if len(inside) < 2 or not inside[0]["close"]:
+        return
+
+    benchmark["window"] = [low.strftime("%Y-%m-%d"), high.strftime("%Y-%m-%d")]
+    benchmark["window_return_pct"] = round(
+        (inside[-1]["close"] / inside[0]["close"] - 1) * 100, 2)
+    benchmark["window_points"] = len(inside)
 
 
 def _benchmark(use_live: bool) -> dict[str, Any] | None:
