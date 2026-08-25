@@ -132,3 +132,55 @@ def test_layer_map_covers_every_subpackage():
     """新增一层却忘了在这里登记，测试要能发现。"""
     actual = {p.name for p in PACKAGE.iterdir() if p.is_dir() and (p / "__init__.py").exists()}
     assert actual == set(ALLOWED), f"分层表与实际子包不一致：{actual ^ set(ALLOWED)}"
+
+
+# ---------------------------------------------------------------------------
+# 运行期兼容性
+# ---------------------------------------------------------------------------
+
+MIN_PYTHON = (3, 9)     # 与 pyproject 的 requires-python 一致
+
+
+@pytest.mark.parametrize("layer,path", ALL_MODULES,
+                         ids=[f"{lay}/{p.name}" for lay, p in ALL_MODULES])
+def test_parses_on_the_minimum_supported_python(layer, path):
+    """按 `requires-python` 声明的下限解析。
+
+    声明支持 3.9 而只在 3.11 上跑过，等于没声明——调度机上装的是哪个版本
+    不由我们决定。CI 里有一条 3.9 的 job，但本地 `make check` 不会跑到，
+    所以这里补一道：新写的 3.10+ 语法当场就红，而不是等推上去才发现。
+    """
+    try:
+        ast.parse(path.read_text(encoding="utf-8"), feature_version=MIN_PYTHON)
+    except SyntaxError as exc:
+        pytest.fail(f"{path.name}:{exc.lineno} 在 Python "
+                    f"{'.'.join(map(str, MIN_PYTHON))} 下无法解析：{exc.msg}")
+
+
+@pytest.mark.parametrize("layer,path", ALL_MODULES,
+                         ids=[f"{lay}/{p.name}" for lay, p in ALL_MODULES])
+def test_pep604_unions_are_guarded_by_future_import(layer, path):
+    """`X | None` 写在函数签名里会在**定义时**求值，3.9 上直接 TypeError。
+
+    `from __future__ import annotations` 把注解变成字符串，从而安全。
+    语法解析查不出这一条——它是合法语法，只是运行期会炸。
+    """
+    source = path.read_text(encoding="utf-8")
+    if "from __future__ import annotations" in source:
+        return
+
+    offenders = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        annotations = [arg.annotation for arg in node.args.args if arg.annotation]
+        if node.returns:
+            annotations.append(node.returns)
+        offenders += [a.lineno for a in annotations
+                      if isinstance(a, ast.BinOp) and isinstance(a.op, ast.BitOr)]
+
+    assert not offenders, (
+        f"{path.name} 第 {offenders} 行用了 `X | Y` 注解但没有 "
+        f"`from __future__ import annotations`，在 Python "
+        f"{'.'.join(map(str, MIN_PYTHON))} 上会在 import 期抛 TypeError。"
+    )
